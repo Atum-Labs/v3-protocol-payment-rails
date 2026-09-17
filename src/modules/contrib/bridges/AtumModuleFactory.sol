@@ -89,8 +89,9 @@ contract AtumModuleFactory is IAtumModuleFactory {
         _checkCreateParams(owner, paymentRails, keeper);
         _checkPaymentRailsOwner(paymentRails);
 
-        // Interactions: Deploy new AtumModule with deterministic address.
-        module = address(new AtumModule{ salt: salt }(permit2, paymentRails, owner, keeper));
+        // Interactions: Deploy new AtumModule with deterministic address. The salt is bound to the
+        // caller so a front-runner cannot occupy the address first (Certora I-04).
+        module = address(new AtumModule{ salt: _effectiveSalt(msg.sender, salt) }(permit2, paymentRails, owner, keeper));
 
         // Effects: Register in the on-chain registry.
         _register(module, paymentRails, owner);
@@ -102,6 +103,7 @@ contract AtumModuleFactory is IAtumModuleFactory {
 
     /// @inheritdoc IAtumModuleFactory
     function predictDeterministicAddress(
+        address deployer,
         address owner,
         address paymentRails,
         address keeper,
@@ -114,8 +116,17 @@ contract AtumModuleFactory is IAtumModuleFactory {
         bytes32 bytecodeHash = keccak256(
             abi.encodePacked(type(AtumModule).creationCode, abi.encode(permit2, paymentRails, owner, keeper))
         );
-        predicted =
-            address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, bytecodeHash)))));
+        // `deployer` is explicit rather than msg.sender: prediction is an off-chain read, and the
+        // party asking is usually not the party deploying.
+        predicted = address(
+            uint160(
+                uint256(
+                    keccak256(
+                        abi.encodePacked(bytes1(0xff), address(this), _effectiveSalt(deployer, salt), bytecodeHash)
+                    )
+                )
+            )
+        );
     }
 
     /// @inheritdoc IAtumModuleFactory
@@ -162,6 +173,19 @@ contract AtumModuleFactory is IAtumModuleFactory {
         if (msg.sender != railsOwner) {
             revert Errors.AtumModuleFactory_NotPaymentRailsOwner(msg.sender, railsOwner);
         }
+    }
+
+    /// @dev Certora I-04: bind the CREATE2 salt to the caller.
+    ///
+    ///      A bare user-supplied salt lets anyone watch `createDeterministic` in the mempool and
+    ///      deploy to the same address first, so the legitimate deployment reverts on a collision.
+    ///      Hashing the caller in makes each deployer's address space disjoint, which removes the
+    ///      race rather than narrowing it.
+    ///
+    ///      NOTE: this CHANGES every deterministic address. Anything that precomputed one must be
+    ///      recalculated via `predictDeterministicAddress`, which takes the deployer explicitly.
+    function _effectiveSalt(address deployer, bytes32 salt) private pure returns (bytes32) {
+        return keccak256(abi.encodePacked(deployer, salt));
     }
 
     function _checkCreateParams(address owner, address paymentRails, address keeper) private pure {

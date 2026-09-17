@@ -42,7 +42,8 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
     }
 
     function test_WhenParamsAreValid_ShouldDeployToPredictedAddress() external {
-        address predicted = factory.predictDeterministicAddress(owner, paymentRails, keeper, DEFAULT_SALT);
+        address predicted =
+            factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
         address module = factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
         assertEq(module, predicted);
     }
@@ -54,7 +55,8 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
     }
 
     function test_WhenParamsAreValid_ShouldEmitEvent() external {
-        address predicted = factory.predictDeterministicAddress(owner, paymentRails, keeper, DEFAULT_SALT);
+        address predicted =
+            factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
 
         vm.expectEmit(true, true, true, true);
         emit AtumModuleCreated(predicted, paymentRails, owner);
@@ -95,9 +97,30 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
         vm.assume(fuzzOwner != address(0));
         vm.assume(fuzzKeeper != address(0));
 
-        address predicted = factory.predictDeterministicAddress(fuzzOwner, paymentRails, fuzzKeeper, fuzzSalt);
+        address predicted =
+            factory.predictDeterministicAddress(address(this), fuzzOwner, paymentRails, fuzzKeeper, fuzzSalt);
         address actual = factory.createDeterministic(fuzzOwner, paymentRails, fuzzKeeper, fuzzSalt);
         assertEq(actual, predicted);
+    }
+
+    /// I-04. Two deployers using the SAME salt must not collide -- that collision is the
+    /// front-running vector: watch a createDeterministic in the mempool, deploy to its address
+    /// first, and the legitimate call reverts.
+    function test_CreateDeterministic_SameSaltDifferentDeployersDoNotCollide() external {
+        address moduleA = factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
+
+        vm.prank(foreignRailsOwner);
+        address moduleB = factory.createDeterministic(owner, foreignPaymentRails, keeper, DEFAULT_SALT);
+
+        assertTrue(moduleA != moduleB, "same salt must not mean the same address for two deployers");
+    }
+
+    /// The salt is bound to the caller, so prediction for a different deployer differs.
+    function test_PredictDeterministicAddress_IsPerDeployer() external view {
+        address forThis = factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
+        address forOther =
+            factory.predictDeterministicAddress(foreignRailsOwner, owner, paymentRails, keeper, DEFAULT_SALT);
+        assertTrue(forThis != forOther, "prediction must be deployer-scoped");
     }
 
     /// L-01. A stranger cannot deploy a module naming someone else's PaymentRails.
