@@ -165,6 +165,52 @@ contract AtumModuleIntegrationTest is Test {
         assertEq(module.pendingAmount(address(sourceToken)), expected, "pendingAmount");
     }
 
+    /// L-02. A refund that arrives while PaymentRails is empty used to be unreachable: the
+    /// allowance was only refreshed by `execute`, and `execute` needs a positive pull.
+    function test_SyncAllowance_RecoversRefundWhenPaymentRailsIsEmpty() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+        permit2.pull(address(sourceToken), address(module), escrow, PAYMENT_AMOUNT);
+
+        // Escrow refunds straight back to the module, and PaymentRails has nothing left to pull.
+        vm.prank(escrow);
+        sourceToken.transfer(address(module), PAYMENT_AMOUNT);
+        assertEq(sourceToken.balanceOf(address(module)), PAYMENT_AMOUNT, "refund landed");
+        assertEq(sourceToken.allowance(address(module), address(permit2)), 0, "allowance consumed");
+
+        vm.prank(keeper);
+        uint256 available = module.syncAllowance(address(sourceToken));
+
+        assertEq(available, PAYMENT_AMOUNT);
+        assertEq(sourceToken.allowance(address(module), address(permit2)), PAYMENT_AMOUNT, "resynced");
+        assertEq(module.pendingAmount(address(sourceToken)), PAYMENT_AMOUNT);
+
+        // Reachable again without the owner pausing and sweeping.
+        permit2.pull(address(sourceToken), address(module), escrow, PAYMENT_AMOUNT);
+        assertEq(sourceToken.balanceOf(address(module)), 0, "refund reclaimed without an owner sweep");
+    }
+
+    function test_SyncAllowance_RevertsWhenCallerIsNotKeeper() external {
+        vm.expectRevert(abi.encodeWithSelector(Errors.AtumModule_NotKeeper.selector, moduleOwner, keeper));
+        vm.prank(moduleOwner);
+        module.syncAllowance(address(sourceToken));
+    }
+
+    function test_SyncAllowance_RevertsWhenPaused() external {
+        vm.prank(moduleOwner);
+        module.pause();
+
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.prank(keeper);
+        module.syncAllowance(address(sourceToken));
+    }
+
+    function test_SyncAllowance_RevertsWhenTokenIsZero() external {
+        vm.expectRevert(Errors.AtumModule_ZeroToken.selector);
+        vm.prank(keeper);
+        module.syncAllowance(address(0));
+    }
+
     /// M-01, the finding itself. An authorisation for one module must be worthless at another
     /// module sharing the same keeper.
     ///

@@ -213,6 +213,31 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
     }
 
     /// @inheritdoc IAtumModule
+    /// @dev Exists because the allowance used to be reachable ONLY through `execute`, and
+    ///      `execute` requires a positive pull from PaymentRails (Certora L-02). When Escrow
+    ///      refunds into the module while PaymentRails is empty, there is then no way to point
+    ///      Permit2 at the returned funds: the keeper can see them and cannot request them, and
+    ///      the only exit is the owner pausing and sweeping everything back. That converts a
+    ///      routine refund into an owner-gated incident.
+    ///
+    ///      `onlyKeeper`, not permissionless: raising the allowance grants nothing on its own,
+    ///      since Permit2 still needs a keeper signature to move anything, but the keeper is the
+    ///      party that is actually blocked and restricting it is the cheaper argument to make.
+    ///      This is also the modifier's first real use -- it was dead code (Certora I-01), and
+    ///      giving it a caller is a better resolution than deleting it.
+    ///
+    ///      `whenNotPaused` so it cannot fight `returnTokenBalance`, which is `whenPaused` and
+    ///      deliberately revokes the allowance to zero.
+    function syncAllowance(address token) external onlyKeeper whenNotPaused returns (uint256 available) {
+        if (token == address(0)) revert Errors.AtumModule_ZeroToken();
+
+        available = IERC20(token).balanceOf(address(this));
+        pendingAmount[token] = available;
+        IERC20(token).forceApprove(permit2, available);
+        emit Permit2ApprovalSet(token, permit2, available);
+    }
+
+    /// @inheritdoc IAtumModule
     function invalidateDigest(bytes32 digest) external onlyKeeperOrOwner {
         _invalidateDigest(digest);
     }

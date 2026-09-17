@@ -75,18 +75,25 @@ interface IAtumModule is IActionModule, IERC1271 {
     ///      coordinated deploy and not a drop-in.
     function keeperDigest(bytes32 permit2Digest) external view returns (bytes32);
 
+    /// @notice Re-points the Permit2 allowance at the module's current balance.
+    /// @dev Keeper-only recovery path for funds that arrive outside `execute` -- Escrow refunds
+    ///      and failed deposits. Without it those funds are unreachable whenever PaymentRails
+    ///      has nothing left to pull, because the allowance was only ever refreshed by `execute`
+    ///      (Certora L-02). Returns the new allowance, which equals the module's balance.
+    function syncAllowance(address token) external returns (uint256 available);
+
     /// @notice Returns whether a Permit2 digest has been permanently invalidated.
     function isPermitDigestInvalidated(bytes32 digest) external view returns (bool);
 
     /// @notice Source amount per token that Permit2 is currently approved to pull.
-    /// @dev Set by `execute` to the module's CURRENT balance, and reset to 0 by
-    ///      `returnTokenBalance` (which also revokes Permit2 to 0). It is NOT a cumulative
+    /// @dev Set by `execute` and `syncAllowance` to the module's CURRENT balance, and reset to 0
+    ///      by `returnTokenBalance` (which also revokes Permit2 to 0). It is NOT a cumulative
     ///      counter: it was one until Certora L-03/I-05, and a monotonic counter necessarily
     ///      disagrees with the balance in both directions -- too high after Permit2 pulls, too
     ///      low after a refund or a donation, the latter bricking the keeper's request against a
     ///      smaller allowance. The invariant now is
     ///      `pendingAmount(token) == IERC20(token).allowance(this, permit2) == balanceOf(this)`
-    ///      as of the last `execute`.
+    ///      as of the last `execute` or `syncAllowance`.
     function pendingAmount(address token) external view returns (uint256);
 
     /// @notice Owner-only keeper rotation.
