@@ -16,7 +16,7 @@ that cannot fail proves nothing, and the compile constraint is what stops the re
 
 | ID   | Severity | Response                                                         |
 | ---- | -------- | ---------------------------------------------------------------- |
-| M-01 | Medium   | Fixed — EIP-712 wrap binding module address + chainid            |
+| M-01 | Medium   | Fixed — EIP-712 wrap binding module address + chainid; distinct keeper per module adopted now |
 | L-01 | Low      | Fixed — creation restricted to the PaymentRails owner            |
 | L-02 | Low      | Fixed — `syncAllowance`, keeper-gated                            |
 | L-03 | Low      | Fixed — unified with I-05                                        |
@@ -27,6 +27,11 @@ that cannot fail proves nothing, and the compile constraint is what stops the re
 | I-04 | Info     | Fixed — CREATE2 salt bound to the caller                         |
 | I-05 | Info     | Fixed — unified with L-03                                        |
 | I-06 | Info     | Fixed — sender debit now checked                                 |
+
+**One operational control applies from now, ahead of any deployment.** M-01's replay requires two modules
+to share a keeper, so **each module is issued its own keeper**. That removes the finding immediately and
+independently of the code change, which matters because M-01's fix requires a coordinated on-chain and
+off-chain deployment and therefore cannot be instantaneous. Details under M-01.
 
 Two observations that changed the shape of the work, neither of which is in the report:
 
@@ -43,6 +48,12 @@ Permit2 constructs does not contain the owner, and Permit2 tracks nonces **per o
 a keeper therefore accepted the identical `(hash, signature)` pair, and one authorisation could be spent
 once at each — one signature, two drains.
 
+**Operational control, adopted immediately and independent of this code.** The replay is only possible
+between modules that **share** a keeper. **Each module is therefore issued its own keeper**, which removes
+the finding today, without waiting on any deployment or off-chain change. This is not a substitute for the
+fix below, and it is not a deferral of it: it is a standing constraint that closes the window between this
+report and the coordinated deploy, and it continues to hold afterwards as defence in depth.
+
 **Fix.** The incoming hash is wrapped in the module's own EIP-712 domain before validation, binding
 `address(this)` and `chainid` into the signed payload. `keeperDigest(bytes32)` is exposed so the off-chain
 signer can compute the value it must sign.
@@ -58,9 +69,6 @@ does nothing, undetectable until exploited. Pinned by `test_InvalidateDigest_Sti
 that has not been cut over produces signatures this module rejects, halting payments for it. This is
 **fail-closed**, which is the correct direction, but the two halves must ship together. Sequence: teach the
 keeper the new form → deploy the module → cut the keeper over → retire the old form.
-
-**Compensating control, available now, no code.** The replay requires modules to **share** a keeper.
-Issuing a distinct keeper per module eliminates it immediately, independently of this deployment.
 
 **Verification.** Restoring raw-hash validation fails seven tests, including
 `test_IsValidSignature_RejectsRawPermit2Digest` in the _opposite_ direction — magic value where failure is
