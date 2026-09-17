@@ -448,6 +448,13 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
 
     function _pullExactToken(address token, uint256 amount) private {
         uint256 balanceBefore = IERC20(token).balanceOf(address(this));
+        // Certora I-06: the received side was checked, the SENDER side was not. A token that
+        // debits the sender more than it credits the recipient -- a sender-paid fee -- leaves
+        // PaymentRails down `amount + fee` while this function sees exactly `amount` arrive and
+        // reports success. The loss is real and silent, and PaymentRails' own accounting then
+        // understates it. Measuring both sides makes the module's "exact transfer" claim true in
+        // the direction it was not.
+        uint256 senderBalanceBefore = IERC20(token).balanceOf(msg.sender);
         // Route through the base class helper so error paths fall through into the
         // module's `_failedResult` / revert surface consistently (#11). The
         // exact-balance check below still defends against fee-on-transfer tokens.
@@ -458,6 +465,14 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
         uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
         if (received != amount) {
             revert Errors.AtumModule_UnsupportedTokenReceivedAmount(amount, received);
+        }
+
+        // Guarded: a token that mints to the sender inside `transferFrom`, or a self-transfer,
+        // could leave the sender's balance level or higher. Underflow would revert opaquely.
+        uint256 senderBalanceAfter = IERC20(token).balanceOf(msg.sender);
+        uint256 debited = senderBalanceBefore > senderBalanceAfter ? senderBalanceBefore - senderBalanceAfter : 0;
+        if (debited != amount) {
+            revert Errors.AtumModule_UnsupportedTokenDebitedAmount(amount, debited);
         }
     }
 
