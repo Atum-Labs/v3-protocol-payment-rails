@@ -8,6 +8,7 @@ import { DataTypes } from "../../../../../../src/types/DataTypes.sol";
 import { Errors } from "../../../../../../src/libraries/Errors.sol";
 import { MockERC20 } from "../../../../../shared/mocks/MockERC20.sol";
 import { FeeOnTransferERC20 } from "../../../../../shared/mocks/FeeOnTransferERC20.sol";
+import { SenderFeeERC20 } from "../../../../../shared/mocks/SenderFeeERC20.sol";
 import { MockPermit2 } from "../../../../../shared/mocks/atum/MockPermit2.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
@@ -70,6 +71,7 @@ contract AtumModuleIntegrationTest is Test {
     MockERC20 internal sourceToken;
     MockERC20 internal secondToken;
     FeeOnTransferERC20 internal feeToken;
+    SenderFeeERC20 internal senderFeeToken;
 
     address internal nodeOwner;
     address internal moduleOwner;
@@ -97,6 +99,7 @@ contract AtumModuleIntegrationTest is Test {
         sourceToken = new MockERC20("Source Token", "SRC");
         secondToken = new MockERC20("Second Token", "TWO");
         feeToken = new FeeOnTransferERC20();
+        senderFeeToken = new SenderFeeERC20();
 
         bytes memory moduleParams = _defaultEncodedParams();
         vm.prank(nodeOwner);
@@ -163,6 +166,30 @@ contract AtumModuleIntegrationTest is Test {
         // Cumulative would be PAYMENT_AMOUNT * 2 here, which the module does not hold.
         assertEq(sourceToken.allowance(address(module), address(permit2)), expected, "allowance");
         assertEq(module.pendingAmount(address(sourceToken)), expected, "pendingAmount");
+    }
+
+    /// I-06. `_pullExactToken` verified what ARRIVED and not what was DEBITED, so a token that
+    /// charges its fee to the sender passed the check: the module received exactly `amount`,
+    /// reported success, and PaymentRails was quietly down `amount + fee`. The existing
+    /// FeeOnTransferERC20 case does not cover this -- it shorts the recipient, which the received
+    /// check already caught. This one credits the recipient in full.
+    function test_ExecuteAction_RevertsWhenSenderPaysTheTransferFee() external {
+        senderFeeToken.mint(address(nodeContract), PAYMENT_AMOUNT * 2);
+
+        bytes memory encoded = _defaultEncodedParams();
+        vm.prank(nodeOwner);
+        nodeContract.configureToken(
+            address(senderFeeToken), "ATUM_PAYMENT", address(module), MIN_BALANCE, encoded, true
+        );
+
+        uint256 railsBefore = senderFeeToken.balanceOf(address(nodeContract));
+
+        vm.prank(executor);
+        bool success = nodeContract.executeAction(address(senderFeeToken), PAYMENT_AMOUNT);
+
+        assertFalse(success, "a sender-paid fee must not read as an exact transfer");
+        assertEq(senderFeeToken.balanceOf(address(module)), 0, "module holds nothing");
+        assertEq(senderFeeToken.balanceOf(address(nodeContract)), railsBefore, "rails lost nothing");
     }
 
     /// L-04. A route change must not redirect funds already staged for the previous route.
