@@ -72,7 +72,7 @@ contract AtumModuleFactory is IAtumModuleFactory {
         module = address(new AtumModule(permit2, paymentRails, owner, keeper));
 
         // Effects: Register in the on-chain registry.
-        _register(module, paymentRails, owner);
+        _register(module, paymentRails, owner, keeper);
     }
 
     /// @inheritdoc IAtumModuleFactory
@@ -94,7 +94,7 @@ contract AtumModuleFactory is IAtumModuleFactory {
         module = address(new AtumModule{ salt: _effectiveSalt(msg.sender, salt) }(permit2, paymentRails, owner, keeper));
 
         // Effects: Register in the on-chain registry.
-        _register(module, paymentRails, owner);
+        _register(module, paymentRails, owner, keeper);
     }
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -204,11 +204,11 @@ contract AtumModuleFactory is IAtumModuleFactory {
     }
 
     /// @dev Registers a newly deployed module in the on-chain registry and emits the creation event.
-    function _register(address module, address paymentRails, address owner) private {
+    function _register(address module, address paymentRails, address owner, address keeper) private {
         _deployedModules.push(module);
         _isDeployedModule[module] = true;
         _modulesByPaymentRails[paymentRails].push(module);
 
-        emit AtumModuleCreated(module, paymentRails, owner);
+        emit AtumModuleCreated(module, paymentRails, owner, keeper);
     }
 }

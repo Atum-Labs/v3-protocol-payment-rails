@@ -16,7 +16,15 @@ interface IAtumModuleFactory {
     /// @param module The address of the deployed AtumModule contract.
     /// @param paymentRails The PaymentRails instance the module is wired to.
     /// @param owner The initial owner of the AtumModule contract.
-    event AtumModuleCreated(address indexed module, address indexed paymentRails, address indexed owner);
+    /// @param keeper The initial keeper of the AtumModule contract. Not indexed: the event already
+    ///        carries the maximum three indexed topics, and the keeper is recoverable from the
+    ///        module's own `KeeperSet(address(0), keeper)` emitted in the same transaction.
+    /// @dev Certora I-03. The initial keeper is the hot key authorising movement of every token
+    ///      the module holds, and it was previously absent from both this event and the module's
+    ///      own logs, so incident response could not correlate a drain to an authorised key.
+    event AtumModuleCreated(
+        address indexed module, address indexed paymentRails, address indexed owner, address keeper
+    );
 
     /*//////////////////////////////////////////////////////////////////////////
                             DEPLOYMENT FUNCTIONS

@@ -13,7 +13,9 @@ abstract contract AtumModuleFactoryBase is Test {
                                     EVENTS
     //////////////////////////////////////////////////////////////////////////*/
 
-    event AtumModuleCreated(address indexed module, address indexed paymentRails, address indexed owner);
+    event AtumModuleCreated(
+        address indexed module, address indexed paymentRails, address indexed owner, address keeper
+    );
 
     /*//////////////////////////////////////////////////////////////////////////
                                     CONSTANTS
