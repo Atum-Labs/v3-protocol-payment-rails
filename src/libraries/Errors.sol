@@ -117,6 +117,11 @@ library Errors {
     /// @notice Thrown when the Permit2 address is the zero address in the constructor.
     error AtumModule_ZeroPermit2();
 
+    /// @notice Thrown when `renounceOwnership` is called on an AtumModule.
+    /// @dev The module must always retain an owner: keeper rotation, pause/unpause and the
+    ///      `onlyOwner whenPaused` recovery sweep all depend on one existing.
+    error AtumModule_RenounceOwnershipDisabled();
+
     /// @notice Thrown when a transfer debited the sender by something other than `amount`.
     /// @dev Certora I-06. The received amount was already checked; this covers the other side,
     ///      where a sender-paid fee leaves PaymentRails down more than the module gained.

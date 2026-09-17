@@ -168,6 +168,16 @@ contract AtumModuleIntegrationTest is Test {
         assertEq(module.pendingAmount(address(sourceToken)), expected, "pendingAmount");
     }
 
+    /// I-02. Renouncing strands every recovery path: keeper rotation, pause/unpause and the
+    /// `onlyOwner whenPaused` sweep all require an owner.
+    function test_RenounceOwnership_Reverts() external {
+        vm.expectRevert(Errors.AtumModule_RenounceOwnershipDisabled.selector);
+        vm.prank(moduleOwner);
+        module.renounceOwnership();
+
+        assertEq(module.owner(), moduleOwner, "owner unchanged");
+    }
+
     /// I-06. `_pullExactToken` verified what ARRIVED and not what was DEBITED, so a token that
     /// charges its fee to the sender passed the check: the module received exactly `amount`,
     /// reported success, and PaymentRails was quietly down `amount + fee`. The existing
