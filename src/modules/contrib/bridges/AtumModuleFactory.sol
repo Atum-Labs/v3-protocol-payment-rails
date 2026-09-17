@@ -4,6 +4,7 @@ pragma solidity 0.8.29;
 import { IAtumModuleFactory } from "../../../interfaces/IAtumModuleFactory.sol";
 import { AtumModule } from "./AtumModule.sol";
 import { Errors } from "../../../libraries/Errors.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title AtumModuleFactory
 /// @custom:tier contrib
@@ -65,6 +66,7 @@ contract AtumModuleFactory is IAtumModuleFactory {
     function create(address owner, address paymentRails, address keeper) external returns (address module) {
         // Checks: Validate the per-instance parameters.
         _checkCreateParams(owner, paymentRails, keeper);
+        _checkPaymentRailsOwner(paymentRails);
 
         // Interactions: Deploy new AtumModule wired to the PaymentRails.
         module = address(new AtumModule(permit2, paymentRails, owner, keeper));
@@ -85,6 +87,7 @@ contract AtumModuleFactory is IAtumModuleFactory {
     {
         // Checks: Validate the per-instance parameters.
         _checkCreateParams(owner, paymentRails, keeper);
+        _checkPaymentRailsOwner(paymentRails);
 
         // Interactions: Deploy new AtumModule with deterministic address.
         module = address(new AtumModule{ salt: salt }(permit2, paymentRails, owner, keeper));
@@ -140,6 +143,27 @@ contract AtumModuleFactory is IAtumModuleFactory {
     //////////////////////////////////////////////////////////////////////////*/
 
     /// @dev Validates the per-instance deployment parameters shared by both create functions.
+    /// @dev Certora L-01: only the PaymentRails owner may create a module bound to it.
+    ///
+    ///      Creation was permissionless, so anyone could deploy a genuine factory module naming a
+    ///      victim's PaymentRails while making themselves its owner and keeper. The result passes
+    ///      `isDeployedModule` and shows up in `getModulesForPaymentRails(victim)`. The registry
+    ///      documents itself as informational, which is a fair answer to "is this authorisation?"
+    ///      but not to "can a stranger write into my listing?" -- this closes the write.
+    ///
+    ///      OPERATIONAL CONSEQUENCE, flagged deliberately: if Atum deploys modules on a customer's
+    ///      behalf, that flow now requires the customer's PaymentRails owner to be the caller, or
+    ///      an explicit deployer allowlist instead of this check. Raised with the module owner.
+    function _checkPaymentRailsOwner(address paymentRails) private view {
+        if (paymentRails.code.length == 0) {
+            revert Errors.AtumModuleFactory_PaymentRailsNotContract(paymentRails);
+        }
+        address railsOwner = Ownable(paymentRails).owner();
+        if (msg.sender != railsOwner) {
+            revert Errors.AtumModuleFactory_NotPaymentRailsOwner(msg.sender, railsOwner);
+        }
+    }
+
     function _checkCreateParams(address owner, address paymentRails, address keeper) private pure {
         // Zero owner would brick the module: no one could rotate the keeper or pause.
         if (owner == address(0)) {

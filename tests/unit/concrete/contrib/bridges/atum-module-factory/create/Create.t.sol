@@ -102,4 +102,33 @@ contract Create_AtumModuleFactory_Test is AtumModuleFactoryBase {
         assertEq(modules[0], module1);
         assertEq(modules[1], module2);
     }
+
+    /// L-01. Creation was permissionless, so anyone could deploy a genuine factory module naming
+    /// a victim's PaymentRails -- making themselves owner and keeper -- and have it recorded
+    /// against the victim in the registry, passing `isDeployedModule` and appearing in
+    /// `getModulesForPaymentRails(victim)`.
+    function test_Create_RevertsWhenCallerIsNotPaymentRailsOwner() external {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.AtumModuleFactory_NotPaymentRailsOwner.selector, address(this), foreignRailsOwner
+            )
+        );
+        factory.create(owner, foreignPaymentRails, keeper);
+    }
+
+    /// The rails owner themselves is still free to create, which is the flow the check preserves.
+    function test_Create_SucceedsForThePaymentRailsOwner() external {
+        vm.prank(foreignRailsOwner);
+        address module = factory.create(owner, foreignPaymentRails, keeper);
+
+        assertTrue(factory.isDeployedModule(module));
+        assertEq(factory.getModulesForPaymentRails(foreignPaymentRails).length, 1);
+    }
+
+    /// Reading `owner()` off an EOA would revert opaquely inside the call; fail by name instead.
+    function test_Create_RevertsWhenPaymentRailsHasNoCode() external {
+        address eoa = makeAddr("notAContract");
+        vm.expectRevert(abi.encodeWithSelector(Errors.AtumModuleFactory_PaymentRailsNotContract.selector, eoa));
+        factory.create(owner, eoa, keeper);
+    }
 }
