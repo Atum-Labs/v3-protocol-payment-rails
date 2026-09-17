@@ -130,8 +130,8 @@ raw `params` bytes, so it tracks the route and not its encoding, and it is scope
 than to route changes as such — an ordering constraint, not a permanent lock. `returnTokenBalance` clears
 it so the record cannot outlive the funds it described.
 
-We are content to adopt Certora's original recommendation instead if they prefer, but it costs the refund
-pickup, and that trade should be explicit.
+Certora's original recommendation remains available as an alternative, at the cost of the refund pickup
+described above. That trade should be made explicitly rather than by default.
 
 ---
 
@@ -143,10 +143,10 @@ appears in `getModulesForPaymentRails(victim)`. The factory NatSpec already stat
 informational and not an authorisation signal — a fair answer to _"is membership trust?"_, but not to
 _"can a stranger write into my listing?"_. Creation now requires the caller to be the PaymentRails owner.
 
-> **Operational consequence, raised explicitly.** If Atum deploys modules on a customer's behalf, that flow
-> now requires the customer's PaymentRails owner to be the caller, or a deployer allowlist in place of an
-> owner check. **51 existing test call sites assumed permissionless creation**, which is some evidence the
-> open model was intentional. If it was, this becomes an allowlist and we will say so in the final response.
+> **Operational consequence.** Any deployment flow whose caller is not the PaymentRails owner now requires
+> either the owner as caller or a deployer allowlist in place of the owner check. **51 existing test call
+> sites assumed permissionless creation**, which suggests the open model may have been intentional; if so,
+> an allowlist is the more appropriate shape.
 
 **I-04.** `createDeterministic` used the caller-supplied salt directly, so a front-runner could observe the
 mempool and occupy the address first, reverting the legitimate deployment. The salt is now
@@ -202,12 +202,3 @@ Deleting the call would additionally have removed the EOA rejection it incidenta
 (`AtumModule_Permit2NotContract`), so the guarantee survives the deletion rather than disappearing with it.
 
 ---
-
-## Open items for the meeting
-
-1. **M-01 keeper cutover** — who owns the off-chain signer change, and is the interim distinct-keeper-per-module
-   control acceptable in the written response?
-2. **L-01** — is permissionless creation intentional? If Atum deploys on customers' behalf, the owner check
-   should become an allowlist.
-3. **L-04** — confirm the sweep-preserving guard is preferred over Certora's emit-the-delta recommendation.
-4. **I-04** — confirm nothing has precomputed a deterministic module address.
