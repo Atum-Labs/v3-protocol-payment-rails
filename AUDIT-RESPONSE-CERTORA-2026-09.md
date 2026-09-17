@@ -12,21 +12,21 @@ Each fix is accompanied by a regression test. `forge test`: **668 pass, 0 fail, 
 
 ## Summary
 
-| ID   | Severity | Response                                                                                         |
-| ---- | -------- | ------------------------------------------------------------------------------------------------ |
-| M-01 | Medium   | Fixed — EIP-712 wrap binding module address and chain id; distinct keeper per module adopted now |
-| L-01 | Low      | Fixed — creation restricted to the PaymentRails owner                                            |
-| L-02 | Low      | Fixed — `syncAllowance`, keeper-gated                                                            |
-| L-03 | Low      | Fixed — addressed together with I-05                                                             |
-| L-04 | Low      | Fixed — by a different mechanism than recommended; see below                                     |
-| I-01 | Info     | Resolved by giving the unused modifier a caller                                                  |
-| I-02 | Info     | Fixed — `renounceOwnership` reverts                                                              |
-| I-03 | Info     | Fixed — initial keeper emitted                                                                   |
-| I-04 | Info     | Fixed — CREATE2 salt bound to the caller                                                         |
-| I-05 | Info     | Fixed — addressed together with L-03                                                             |
-| I-06 | Info     | Fixed — sender debit now checked                                                                 |
+| ID   | Severity | Response                                                     |
+| ---- | -------- | ------------------------------------------------------------ |
+| M-01 | Medium   | Fixed — EIP-712 wrap binding module address and chain id     |
+| L-01 | Low      | Fixed — creation restricted to the PaymentRails owner        |
+| L-02 | Low      | Fixed — `syncAllowance`, keeper-gated                        |
+| L-03 | Low      | Fixed — addressed together with I-05                         |
+| L-04 | Low      | Fixed — by a different mechanism than recommended; see below |
+| I-01 | Info     | Resolved by giving the unused modifier a caller              |
+| I-02 | Info     | Fixed — `renounceOwnership` reverts                          |
+| I-03 | Info     | Fixed — initial keeper emitted                               |
+| I-04 | Info     | Fixed — CREATE2 salt bound to the caller                     |
+| I-05 | Info     | Fixed — addressed together with L-03                         |
+| I-06 | Info     | Fixed — sender debit now checked                             |
 
-**An operational control applies from now, ahead of any deployment.** M-01's replay requires two modules to share a keeper. Each module is therefore issued its own keeper, which removes the finding immediately and independently of the code change. This matters because M-01's fix requires a coordinated on-chain and off-chain deployment and so cannot be instantaneous.
+**A key-management constraint accompanies the fix.** M-01's replay is only possible between modules that share a keeper, so modules will be issued distinct keepers. This is a deployment-time constraint on key management, **not enforced on-chain**, and it is stated here because M-01's fix requires a coordinated on-chain and off-chain deployment and so cannot be instantaneous. It reduces exposure in that interval; the fix below is what removes the finding.
 
 Two additional observations arising from the review:
 
@@ -39,7 +39,7 @@ Two additional observations arising from the review:
 
 **Mechanism.** `isValidSignature` validated the caller's raw hash directly against the keeper. The digest Permit2 constructs does not contain the owner, and Permit2 tracks nonces per owner. Two modules sharing a keeper therefore accepted the identical `(hash, signature)` pair, and one authorisation could be spent once at each.
 
-**Operational control, effective immediately.** The replay is only possible between modules that share a keeper. Each module is issued its own keeper, which removes the finding without waiting on any deployment or off-chain change. This is neither a substitute for the fix below nor a deferral of it: it closes the interval between this report and the coordinated deployment, and continues to apply afterwards as defence in depth.
+**Key-management constraint.** The replay is only possible between modules that share a keeper, so modules will be issued distinct keepers. To be precise about its status: this is a constraint on deployment practice and is **not enforced by the contracts** — nothing in the module or the factory rejects a keeper already in use elsewhere, and `setKeeper` could reintroduce sharing after deployment. It is therefore a reduction in exposure during the interval before the fix is deployed, not a control the code guarantees. The fix below is what removes the finding.
 
 **Fix.** The incoming hash is wrapped in the module's own EIP-712 domain before validation, binding `address(this)` and `chainid` into the signed payload. `keeperDigest(bytes32)` is exposed so the off-chain signer can compute the value it must sign.
 
