@@ -175,4 +175,13 @@ library Errors {
 
     /// @notice Thrown when a module is created with a zero keeper address.
     error AtumModuleFactory_ZeroKeeper();
+
+    /// @notice Thrown when a module is created for a PaymentRails the caller does not own.
+    /// @dev Certora L-01. Creation used to be permissionless, so anyone could deploy a module
+    ///      naming a victim's PaymentRails and have it recorded against them in the registry.
+    error AtumModuleFactory_NotPaymentRailsOwner(address caller, address paymentRailsOwner);
+
+    /// @notice Thrown when the supplied PaymentRails address has no code.
+    /// @dev Reading `owner()` off an EOA would revert opaquely; fail with a named error instead.
+    error AtumModuleFactory_PaymentRailsNotContract(address paymentRails);
 }

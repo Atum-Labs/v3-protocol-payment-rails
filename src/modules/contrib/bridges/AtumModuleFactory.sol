@@ -4,6 +4,7 @@ pragma solidity 0.8.29;
 import { IAtumModuleFactory } from "../../../interfaces/IAtumModuleFactory.sol";
 import { AtumModule } from "./AtumModule.sol";
 import { Errors } from "../../../libraries/Errors.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title AtumModuleFactory
 /// @custom:tier contrib
@@ -65,6 +66,7 @@ contract AtumModuleFactory is IAtumModuleFactory {
     function create(address owner, address paymentRails, address keeper) external returns (address module) {
         // Checks: Validate the per-instance parameters.
         _checkCreateParams(owner, paymentRails, keeper);
+        _checkPaymentRailsOwner(paymentRails);
 
         // Interactions: Deploy new AtumModule wired to the PaymentRails.
         module = address(new AtumModule(permit2, paymentRails, owner, keeper));
@@ -85,9 +87,13 @@ contract AtumModuleFactory is IAtumModuleFactory {
     {
         // Checks: Validate the per-instance parameters.
         _checkCreateParams(owner, paymentRails, keeper);
+        _checkPaymentRailsOwner(paymentRails);
 
-        // Interactions: Deploy new AtumModule with deterministic address.
-        module = address(new AtumModule{ salt: salt }(permit2, paymentRails, owner, keeper));
+        // Interactions: Deploy new AtumModule with deterministic address. The salt is bound to the
+        // caller so a front-runner cannot occupy the address first (Certora I-04).
+        module = address(
+            new AtumModule{ salt: _effectiveSalt(msg.sender, salt) }(permit2, paymentRails, owner, keeper)
+        );
 
         // Effects: Register in the on-chain registry.
         _register(module, paymentRails, owner);
@@ -99,6 +105,7 @@ contract AtumModuleFactory is IAtumModuleFactory {
 
     /// @inheritdoc IAtumModuleFactory
     function predictDeterministicAddress(
+        address deployer,
         address owner,
         address paymentRails,
         address keeper,
@@ -111,8 +118,19 @@ contract AtumModuleFactory is IAtumModuleFactory {
         bytes32 bytecodeHash = keccak256(
             abi.encodePacked(type(AtumModule).creationCode, abi.encode(permit2, paymentRails, owner, keeper))
         );
-        predicted =
-            address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, bytecodeHash)))));
+        // `deployer` is explicit rather than msg.sender: prediction is an off-chain read, and the
+        // party asking is usually not the party deploying.
+        predicted = address(
+            uint160(
+                uint256(
+                    keccak256(
+                        abi.encodePacked(
+                            bytes1(0xff), address(this), _effectiveSalt(deployer, salt), bytecodeHash
+                        )
+                    )
+                )
+            )
+        );
     }
 
     /// @inheritdoc IAtumModuleFactory
@@ -140,6 +158,40 @@ contract AtumModuleFactory is IAtumModuleFactory {
     //////////////////////////////////////////////////////////////////////////*/
 
     /// @dev Validates the per-instance deployment parameters shared by both create functions.
+    /// @dev Certora L-01: only the PaymentRails owner may create a module bound to it.
+    ///
+    ///      Creation was permissionless, so anyone could deploy a genuine factory module naming a
+    ///      victim's PaymentRails while making themselves its owner and keeper. The result passes
+    ///      `isDeployedModule` and shows up in `getModulesForPaymentRails(victim)`. The registry
+    ///      documents itself as informational, which is a fair answer to "is this authorisation?"
+    ///      but not to "can a stranger write into my listing?" -- this closes the write.
+    ///
+    ///      OPERATIONAL CONSEQUENCE, flagged deliberately: if Atum deploys modules on a customer's
+    ///      behalf, that flow now requires the customer's PaymentRails owner to be the caller, or
+    ///      an explicit deployer allowlist instead of this check. Raised with the module owner.
+    function _checkPaymentRailsOwner(address paymentRails) private view {
+        if (paymentRails.code.length == 0) {
+            revert Errors.AtumModuleFactory_PaymentRailsNotContract(paymentRails);
+        }
+        address railsOwner = Ownable(paymentRails).owner();
+        if (msg.sender != railsOwner) {
+            revert Errors.AtumModuleFactory_NotPaymentRailsOwner(msg.sender, railsOwner);
+        }
+    }
+
+    /// @dev Certora I-04: bind the CREATE2 salt to the caller.
+    ///
+    ///      A bare user-supplied salt lets anyone watch `createDeterministic` in the mempool and
+    ///      deploy to the same address first, so the legitimate deployment reverts on a collision.
+    ///      Hashing the caller in makes each deployer's address space disjoint, which removes the
+    ///      race rather than narrowing it.
+    ///
+    ///      NOTE: this CHANGES every deterministic address. Anything that precomputed one must be
+    ///      recalculated via `predictDeterministicAddress`, which takes the deployer explicitly.
+    function _effectiveSalt(address deployer, bytes32 salt) private pure returns (bytes32) {
+        return keccak256(abi.encodePacked(deployer, salt));
+    }
+
     function _checkCreateParams(address owner, address paymentRails, address keeper) private pure {
         // Zero owner would brick the module: no one could rotate the keeper or pause.
         if (owner == address(0)) {

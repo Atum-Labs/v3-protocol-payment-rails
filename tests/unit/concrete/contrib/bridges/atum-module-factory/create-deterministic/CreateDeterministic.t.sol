@@ -42,7 +42,7 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
     }
 
     function test_WhenParamsAreValid_ShouldDeployToPredictedAddress() external {
-        address predicted = factory.predictDeterministicAddress(owner, paymentRails, keeper, DEFAULT_SALT);
+        address predicted = factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
         address module = factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
         assertEq(module, predicted);
     }
@@ -54,7 +54,7 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
     }
 
     function test_WhenParamsAreValid_ShouldEmitEvent() external {
-        address predicted = factory.predictDeterministicAddress(owner, paymentRails, keeper, DEFAULT_SALT);
+        address predicted = factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
 
         vm.expectEmit(true, true, true, true);
         emit AtumModuleCreated(predicted, paymentRails, owner);
@@ -82,26 +82,58 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
     }
 
     function test_WhenSameSaltWithDifferentPaymentRails_ShouldDeployToDifferentAddresses() external {
-        address otherPaymentRails = makeAddr("otherPaymentRails");
         address module1 = factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
         address module2 = factory.createDeterministic(owner, otherPaymentRails, keeper, DEFAULT_SALT);
         assertTrue(module1 != module2);
     }
 
+    /// @dev The PaymentRails address is no longer fuzzed: Certora L-01 requires it to be a real
+    ///      contract whose `owner()` is the caller, so an arbitrary address cannot be used. Owner,
+    ///      keeper and salt stay fuzzed, which is what this test is actually about -- that
+    ///      prediction tracks deployment across inputs.
     function testFuzz_PredictedAddressMatchesActual(
         address fuzzOwner,
-        address fuzzPaymentRails,
         address fuzzKeeper,
         bytes32 fuzzSalt
     )
         external
     {
         vm.assume(fuzzOwner != address(0));
-        vm.assume(fuzzPaymentRails != address(0));
         vm.assume(fuzzKeeper != address(0));
 
-        address predicted = factory.predictDeterministicAddress(fuzzOwner, fuzzPaymentRails, fuzzKeeper, fuzzSalt);
-        address actual = factory.createDeterministic(fuzzOwner, fuzzPaymentRails, fuzzKeeper, fuzzSalt);
+        address predicted =
+            factory.predictDeterministicAddress(address(this), fuzzOwner, paymentRails, fuzzKeeper, fuzzSalt);
+        address actual = factory.createDeterministic(fuzzOwner, paymentRails, fuzzKeeper, fuzzSalt);
         assertEq(actual, predicted);
+    }
+
+    /// I-04. Two deployers using the SAME salt must not collide -- that collision is the
+    /// front-running vector: watch a createDeterministic in the mempool, deploy to its address
+    /// first, and the legitimate call reverts.
+    function test_CreateDeterministic_SameSaltDifferentDeployersDoNotCollide() external {
+        address moduleA = factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
+
+        vm.prank(foreignRailsOwner);
+        address moduleB = factory.createDeterministic(owner, foreignPaymentRails, keeper, DEFAULT_SALT);
+
+        assertTrue(moduleA != moduleB, "same salt must not mean the same address for two deployers");
+    }
+
+    /// The salt is bound to the caller, so prediction for a different deployer differs.
+    function test_PredictDeterministicAddress_IsPerDeployer() external view {
+        address forThis = factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
+        address forOther =
+            factory.predictDeterministicAddress(foreignRailsOwner, owner, paymentRails, keeper, DEFAULT_SALT);
+        assertTrue(forThis != forOther, "prediction must be deployer-scoped");
+    }
+
+    /// L-01. A stranger cannot deploy a module naming someone else's PaymentRails.
+    function test_CreateDeterministic_RevertsWhenCallerIsNotPaymentRailsOwner() external {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.AtumModuleFactory_NotPaymentRailsOwner.selector, address(this), foreignRailsOwner
+            )
+        );
+        factory.createDeterministic(owner, foreignPaymentRails, keeper, DEFAULT_SALT);
     }
 }
