@@ -42,7 +42,8 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
     }
 
     function test_WhenParamsAreValid_ShouldDeployToPredictedAddress() external {
-        address predicted = factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
+        address predicted =
+            factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
         address module = factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
         assertEq(module, predicted);
     }
@@ -54,7 +55,8 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
     }
 
     function test_WhenParamsAreValid_ShouldEmitEvent() external {
-        address predicted = factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
+        address predicted =
+            factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
 
         vm.expectEmit(true, true, true, true);
         emit AtumModuleCreated(predicted, paymentRails, owner);
@@ -91,13 +93,7 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
     ///      contract whose `owner()` is the caller, so an arbitrary address cannot be used. Owner,
     ///      keeper and salt stay fuzzed, which is what this test is actually about -- that
     ///      prediction tracks deployment across inputs.
-    function testFuzz_PredictedAddressMatchesActual(
-        address fuzzOwner,
-        address fuzzKeeper,
-        bytes32 fuzzSalt
-    )
-        external
-    {
+    function testFuzz_PredictedAddressMatchesActual(address fuzzOwner, address fuzzKeeper, bytes32 fuzzSalt) external {
         vm.assume(fuzzOwner != address(0));
         vm.assume(fuzzKeeper != address(0));
 

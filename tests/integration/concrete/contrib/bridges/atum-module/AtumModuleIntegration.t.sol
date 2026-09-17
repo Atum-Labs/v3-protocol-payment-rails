@@ -1015,9 +1015,7 @@ contract AtumModuleIntegrationTest is Test {
         // leaving `configureToken` to run as the test contract and revert on Ownable.
         bytes memory encoded = module.encodeParams(routeB);
         vm.prank(nodeOwner);
-        nodeContract.configureToken(
-            address(sourceToken), "ATUM_PAYMENT", address(module), MIN_BALANCE, encoded, true
-        );
+        nodeContract.configureToken(address(sourceToken), "ATUM_PAYMENT", address(module), MIN_BALANCE, encoded, true);
     }
 
     function _routeHash(DataTypes.AtumPaymentParams memory params) internal pure returns (bytes32) {

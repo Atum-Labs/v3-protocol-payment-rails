@@ -83,8 +83,7 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
 
     /// @dev Permit2 digests that must no longer satisfy ERC-1271 checks.
     /// @inheritdoc IAtumModule
-    bytes32 public constant override KEEPER_APPROVAL_TYPEHASH =
-        keccak256("AtumKeeperApproval(bytes32 permit2Digest)");
+    bytes32 public constant override KEEPER_APPROVAL_TYPEHASH = keccak256("AtumKeeperApproval(bytes32 permit2Digest)");
 
     mapping(bytes32 digest => bool invalidated) private _invalidatedPermitDigests;
 

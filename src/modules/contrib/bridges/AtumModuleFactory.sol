@@ -91,9 +91,7 @@ contract AtumModuleFactory is IAtumModuleFactory {
 
         // Interactions: Deploy new AtumModule with deterministic address. The salt is bound to the
         // caller so a front-runner cannot occupy the address first (Certora I-04).
-        module = address(
-            new AtumModule{ salt: _effectiveSalt(msg.sender, salt) }(permit2, paymentRails, owner, keeper)
-        );
+        module = address(new AtumModule{ salt: _effectiveSalt(msg.sender, salt) }(permit2, paymentRails, owner, keeper));
 
         // Effects: Register in the on-chain registry.
         _register(module, paymentRails, owner);
@@ -124,9 +122,7 @@ contract AtumModuleFactory is IAtumModuleFactory {
             uint160(
                 uint256(
                     keccak256(
-                        abi.encodePacked(
-                            bytes1(0xff), address(this), _effectiveSalt(deployer, salt), bytecodeHash
-                        )
+                        abi.encodePacked(bytes1(0xff), address(this), _effectiveSalt(deployer, salt), bytecodeHash)
                     )
                 )
             )

@@ -14,19 +14,19 @@ that cannot fail proves nothing, and the compile constraint is what stops the re
 
 ## Summary
 
-| ID | Severity | Response |
-| --- | --- | --- |
-| M-01 | Medium | Fixed — EIP-712 wrap binding module address + chainid |
-| L-01 | Low | Fixed — creation restricted to the PaymentRails owner |
-| L-02 | Low | Fixed — `syncAllowance`, keeper-gated |
-| L-03 | Low | Fixed — unified with I-05 |
-| L-04 | Low | Fixed — **by a different mechanism than recommended**; see below |
-| I-01 | Info | Resolved by giving the modifier a caller, not by deleting it |
-| I-02 | Info | Fixed — `renounceOwnership` reverts |
-| I-03 | Info | Fixed — initial keeper emitted |
-| I-04 | Info | Fixed — CREATE2 salt bound to the caller |
-| I-05 | Info | Fixed — unified with L-03 |
-| I-06 | Info | Fixed — sender debit now checked |
+| ID   | Severity | Response                                                         |
+| ---- | -------- | ---------------------------------------------------------------- |
+| M-01 | Medium   | Fixed — EIP-712 wrap binding module address + chainid            |
+| L-01 | Low      | Fixed — creation restricted to the PaymentRails owner            |
+| L-02 | Low      | Fixed — `syncAllowance`, keeper-gated                            |
+| L-03 | Low      | Fixed — unified with I-05                                        |
+| L-04 | Low      | Fixed — **by a different mechanism than recommended**; see below |
+| I-01 | Info     | Resolved by giving the modifier a caller, not by deleting it     |
+| I-02 | Info     | Fixed — `renounceOwnership` reverts                              |
+| I-03 | Info     | Fixed — initial keeper emitted                                   |
+| I-04 | Info     | Fixed — CREATE2 salt bound to the caller                         |
+| I-05 | Info     | Fixed — unified with L-03                                        |
+| I-06 | Info     | Fixed — sender debit now checked                                 |
 
 Two observations that changed the shape of the work, neither of which is in the report:
 
@@ -49,7 +49,7 @@ signer can compute the value it must sign.
 
 **A trap inside the fix, not present in the report.** `_invalidatedPermitDigests` is keyed on the **raw**
 hash, and `invalidateDigest` is called by the keeper with the Permit2 digest — the same value that arrives
-at `isValidSignature`. The wrap changes what is *validated*; it must not change what is *looked up*.
+at `isValidSignature`. The wrap changes what is _validated_; it must not change what is _looked up_.
 Re-keying that map to the wrapped digest would leave every previously revoked digest appearing
 un-invalidated while the function still returned the magic value: a kill-switch that reports success and
 does nothing, undetectable until exploited. Pinned by `test_InvalidateDigest_StillBlocksAfterTheEIP712Wrap`.
@@ -63,7 +63,7 @@ keeper the new form → deploy the module → cut the keeper over → retire the
 Issuing a distinct keeper per module eliminates it immediately, independently of this deployment.
 
 **Verification.** Restoring raw-hash validation fails seven tests, including
-`test_IsValidSignature_RejectsRawPermit2Digest` in the *opposite* direction — magic value where failure is
+`test_IsValidSignature_RejectsRawPermit2Digest` in the _opposite_ direction — magic value where failure is
 expected — which is direct evidence raw digests were previously accepted. The replay test asserts the exact
 exploit shape: one signature over the raw digest, offered to two modules, refused by both.
 
@@ -124,7 +124,7 @@ module's documented sweep behaviour — which the report itself quotes under L-0
 deposits are intended to be collected by a later request. Both properties cannot hold simultaneously.
 
 **Fix.** Retain the sweep; make the collision impossible. `stagedRoute[token]` records the destination the
-current balance was pulled for, and `execute` refuses a *different* route while the balance is non-zero.
+current balance was pulled for, and `execute` refuses a _different_ route while the balance is non-zero.
 Drain or sweep first, then reconfigure. The guard is keyed on the decoded destination triple rather than the
 raw `params` bytes, so it tracks the route and not its encoding, and it is scoped to staged funds rather
 than to route changes as such — an ordering constraint, not a permanent lock. `returnTokenBalance` clears
@@ -140,8 +140,8 @@ pickup, and that trade should be explicit.
 **L-01.** Creation was permissionless, so any address could deploy a genuine factory module naming a
 victim's PaymentRails while assigning itself owner and keeper. The result satisfies `isDeployedModule` and
 appears in `getModulesForPaymentRails(victim)`. The factory NatSpec already states the registry is
-informational and not an authorisation signal — a fair answer to *"is membership trust?"*, but not to
-*"can a stranger write into my listing?"*. Creation now requires the caller to be the PaymentRails owner.
+informational and not an authorisation signal — a fair answer to _"is membership trust?"_, but not to
+_"can a stranger write into my listing?"_. Creation now requires the caller to be the PaymentRails owner.
 
 > **Operational consequence, raised explicitly.** If Atum deploys modules on a customer's behalf, that flow
 > now requires the customer's PaymentRails owner to be the caller, or a deployer allowlist in place of an

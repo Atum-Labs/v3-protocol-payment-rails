@@ -49,7 +49,6 @@ interface IAtumModule is IActionModule, IERC1271 {
     /// @notice Permit2 contract used by Atum Escrow on this source chain.
     function permit2() external view returns (address);
 
-
     /// @notice Immutable PaymentRails allowed to call `execute` and receive fail-safe recovery returns.
     function paymentRails() external view returns (address);
 

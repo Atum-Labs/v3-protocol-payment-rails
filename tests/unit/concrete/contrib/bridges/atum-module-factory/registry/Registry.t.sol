@@ -58,7 +58,6 @@ contract Registry_AtumModuleFactory_Test is AtumModuleFactoryBase {
     }
 
     function test_GivenModules_GetModulesForPaymentRails_ShouldSeparateLookups() external {
-
         address module1 = factory.create(owner, paymentRails, keeper);
         address module2 = factory.create(owner, otherPaymentRails, keeper);
 
