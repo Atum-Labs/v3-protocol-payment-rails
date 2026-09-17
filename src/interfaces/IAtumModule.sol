@@ -56,6 +56,23 @@ interface IAtumModule is IActionModule, IERC1271 {
     /// @notice Keeper that signs Permit2 digests and invalidates abandoned digests.
     function keeper() external view returns (address);
 
+    /// @notice EIP-712 type hash for the keeper's approval of a Permit2 digest.
+    /// @dev Certora M-01.
+    function KEEPER_APPROVAL_TYPEHASH() external view returns (bytes32);
+
+    /// @notice The digest the keeper must sign for `permit2Digest` to be accepted by THIS module.
+    /// @dev Certora M-01. `isValidSignature` used to validate the raw hash against the keeper, and
+    ///      Permit2's digest does not contain the owner, so any two modules sharing a keeper
+    ///      accepted the same (hash, signature) pair -- and Permit2's nonces are per owner, so a
+    ///      single authorisation could be replayed to drain each of them. Wrapping the digest in
+    ///      this module's EIP-712 domain binds `address(this)` and `chainid` into what is signed.
+    ///
+    ///      OFF-CHAIN CONSEQUENCE: the keeper must sign THIS value, not the bare Permit2 digest.
+    ///      A keeper that has not been updated produces signatures this module rejects, which
+    ///      stops payments for it until the keeper is cut over. That is fail-closed, but it is a
+    ///      coordinated deploy and not a drop-in.
+    function keeperDigest(bytes32 permit2Digest) external view returns (bytes32);
+
     /// @notice Destination route the currently-staged balance was pulled for, as
     ///         `keccak256(abi.encode(AtumPaymentParams))`. Zero when nothing is staged.
     /// @dev Certora L-04. `execute` refuses a different route while the token balance is
