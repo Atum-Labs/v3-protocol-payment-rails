@@ -2,7 +2,6 @@
 pragma solidity ^0.8.29;
 
 import { IAtumModule } from "../../../interfaces/IAtumModule.sol";
-import { IPermit2 } from "../../../interfaces/IPermit2.sol";
 import { IActionModule } from "../../../interfaces/IActionModule.sol";
 import { ActionModuleBase } from "../../../abstracts/ActionModuleBase.sol";
 import { DataTypes } from "../../../types/DataTypes.sol";
@@ -72,9 +71,6 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
     address public immutable override permit2;
 
     /// @inheritdoc IAtumModule
-    bytes32 public immutable override permit2DomainSeparator;
-
-    /// @inheritdoc IAtumModule
     address public immutable override paymentRails;
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -97,6 +93,9 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
     ///      `returnTokenBalance` (which also revokes the Permit2 allowance to 0).
     mapping(address token => uint256 amount) public override pendingAmount;
 
+    /// @inheritdoc IAtumModule
+    mapping(address token => bytes32 route) public override stagedRoute;
+
     /*//////////////////////////////////////////////////////////////////////////
                                   CONSTRUCTOR
     //////////////////////////////////////////////////////////////////////////*/
@@ -110,10 +109,35 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
         if (_paymentRails == address(0)) revert Errors.AtumModule_ZeroPaymentRails();
         if (_keeper == address(0)) revert Errors.AtumModule_ZeroKeeper();
 
+        // Explicit, where it used to be a side effect. The constructor previously called
+        // `DOMAIN_SEPARATOR()` on this address and stored the result in an immutable that nothing
+        // ever read -- dead state the audit did not flag. Removing it would also have removed the
+        // EOA rejection it incidentally provided (the call reverts against an address with no
+        // code), so the check is stated directly instead. Caching a domain separator would have
+        // been wrong to keep in any case: Permit2 rebuilds its separator when `chainid` changes,
+        // so a value fixed at construction goes stale across a fork.
+        if (_permit2.code.length == 0) revert Errors.AtumModule_Permit2NotContract(_permit2);
+
         permit2 = _permit2;
         paymentRails = _paymentRails;
         keeper = _keeper;
-        permit2DomainSeparator = IPermit2(_permit2).DOMAIN_SEPARATOR();
+
+        // The initial keeper is the hot key that authorises moving every token this module holds,
+        // and it was previously assigned without ever being emitted (Certora I-03): `KeeperSet`
+        // only fired on rotation, so an indexer reconstructing "who could sign for this module"
+        // had no record of the first one. Emitting from zero makes the whole keeper history
+        // recoverable from logs alone.
+        emit KeeperSet(address(0), _keeper);
+    }
+
+    /// @notice Disabled: this module must always retain an owner.
+    /// @dev Certora I-02. `Ownable.renounceOwnership` would set the owner to `address(0)` and
+    ///      permanently disable keeper rotation, pause/unpause and `returnTokenBalance`. The
+    ///      recovery path is `onlyOwner whenPaused`, so renouncing while paused and holding
+    ///      tokens strands them with no way out. There is no situation in which this module
+    ///      wants no owner, so the function reverts rather than being left as a footgun.
+    function renounceOwnership() public view override onlyOwner {
+        revert Errors.AtumModule_RenounceOwnershipDisabled();
     }
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -144,21 +168,58 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
             return _failedResult(token, "Insufficient balance");
         }
 
+        // Certora L-04: a route change must not silently redirect funds already staged for the
+        // previous one.
+        //
+        // The module holds one fungible balance per token and the keeper is documented to sweep
+        // ALL of it (see the note on refunds below), so tokens pulled while Route A was configured
+        // are indistinguishable from tokens pulled under Route B. Change the PaymentRails config
+        // between an intent and its settlement and the next intent advertises the whole balance
+        // against the new destination -- including the funds staged for the old one.
+        //
+        // Certora's own recommendation was to emit only the newly-pulled amount, but that
+        // contradicts the documented sweep the report quotes under L-02: refunds and failed
+        // deposits are meant to be picked up by a later request. Both cannot hold. This keeps the
+        // sweep and makes the collision impossible instead, by refusing to stage a second route
+        // on top of a non-empty balance. Drain or sweep first, then reconfigure.
+        //
+        // Keyed on the decoded destination triple rather than the raw `params` bytes, so the guard
+        // tracks the ROUTE and not its encoding.
+        bytes32 routeHash = keccak256(abi.encode(paymentParams));
+        bytes32 staged = stagedRoute[token];
+        if (staged != bytes32(0) && staged != routeHash && IERC20(token).balanceOf(address(this)) > 0) {
+            return _failedResult(token, "Route changed while funds are staged");
+        }
+
         _pullExactToken(token, amount);
+        stagedRoute[token] = routeHash;
 
-        // Cap the Permit2 allowance to actual cumulative pending. Each `execute`
-        // grows `pendingAmount[token]`; Permit2 pulls reduce the on-chain allowance
-        // as Escrow drains. `forceApprove` sets the new ceiling absolutely, so an
-        // un-drained prior allowance gets bumped to the new total (not double-added).
-        pendingAmount[token] += amount;
-        uint256 newAllowance = pendingAmount[token];
-        IERC20(token).forceApprove(permit2, newAllowance);
-        emit Permit2ApprovalSet(token, permit2, newAllowance);
+        // ONE quantity drives the allowance, the emitted intent and `pendingAmount`: the balance
+        // the module actually holds right now (Certora L-03 + I-05).
+        //
+        // Before this, the allowance followed a monotonic counter (`pendingAmount += amount`,
+        // never decremented) while the intent followed `balanceOf`. Those are different numbers
+        // and they drifted apart in BOTH directions:
+        //
+        //   * after Permit2 pulled, the balance dropped and the counter did not, so the module
+        //     advertised an allowance over funds it no longer held;
+        //   * after an Escrow refund or a 1-wei donation, the balance rose above the counter, so
+        //     the keeper read the larger number off the event, requested it, and Permit2's
+        //     `transferFrom` reverted against the smaller allowance -- which bricked a fresh
+        //     module for the price of one wei.
+        //
+        // Deriving all three from the balance makes the post-condition trivially true:
+        // `pendingAmount[token] == allowance(permit2) == balanceOf(this)`. A donation is then
+        // harmless rather than fatal -- it is simply money the module really has, which is what
+        // the sweep behaviour documented on `execute` already assumes.
+        uint256 available = IERC20(token).balanceOf(address(this));
+        pendingAmount[token] = available;
+        IERC20(token).forceApprove(permit2, available);
+        emit Permit2ApprovalSet(token, permit2, available);
 
-        uint256 availableSourceAmount = IERC20(token).balanceOf(address(this));
         emit AtumIntentCreated(
             token,
-            availableSourceAmount,
+            available,
             paymentParams.destinationChain,
             paymentParams.destinationAccount,
             paymentParams.destinationAsset
@@ -185,6 +246,31 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
     /// @inheritdoc IAtumModule
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    /// @inheritdoc IAtumModule
+    /// @dev Exists because the allowance used to be reachable ONLY through `execute`, and
+    ///      `execute` requires a positive pull from PaymentRails (Certora L-02). When Escrow
+    ///      refunds into the module while PaymentRails is empty, there is then no way to point
+    ///      Permit2 at the returned funds: the keeper can see them and cannot request them, and
+    ///      the only exit is the owner pausing and sweeping everything back. That converts a
+    ///      routine refund into an owner-gated incident.
+    ///
+    ///      `onlyKeeper`, not permissionless: raising the allowance grants nothing on its own,
+    ///      since Permit2 still needs a keeper signature to move anything, but the keeper is the
+    ///      party that is actually blocked and restricting it is the cheaper argument to make.
+    ///      This is also the modifier's first real use -- it was dead code (Certora I-01), and
+    ///      giving it a caller is a better resolution than deleting it.
+    ///
+    ///      `whenNotPaused` so it cannot fight `returnTokenBalance`, which is `whenPaused` and
+    ///      deliberately revokes the allowance to zero.
+    function syncAllowance(address token) external onlyKeeper whenNotPaused returns (uint256 available) {
+        if (token == address(0)) revert Errors.AtumModule_ZeroToken();
+
+        available = IERC20(token).balanceOf(address(this));
+        pendingAmount[token] = available;
+        IERC20(token).forceApprove(permit2, available);
+        emit Permit2ApprovalSet(token, permit2, available);
     }
 
     /// @inheritdoc IAtumModule
@@ -393,6 +479,9 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
         // Permit2 allowance so an already-signed-but-uninvalidated digest can't
         // re-pull anything that arrives later (refund, mistaken transfer).
         pendingAmount[token] = 0;
+        // The balance is now zero, so the L-04 guard would pass regardless; clearing keeps the
+        // recorded route from outliving the funds it described.
+        stagedRoute[token] = bytes32(0);
         IERC20(token).forceApprove(permit2, 0);
         emit Permit2ApprovalSet(token, permit2, 0);
 

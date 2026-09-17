@@ -49,8 +49,6 @@ interface IAtumModule is IActionModule, IERC1271 {
     /// @notice Permit2 contract used by Atum Escrow on this source chain.
     function permit2() external view returns (address);
 
-    /// @notice Permit2 domain separator captured at deployment.
-    function permit2DomainSeparator() external view returns (bytes32);
 
     /// @notice Immutable PaymentRails allowed to call `execute` and receive fail-safe recovery returns.
     function paymentRails() external view returns (address);
@@ -58,13 +56,33 @@ interface IAtumModule is IActionModule, IERC1271 {
     /// @notice Keeper that signs Permit2 digests and invalidates abandoned digests.
     function keeper() external view returns (address);
 
+    /// @notice Destination route the currently-staged balance was pulled for, as
+    ///         `keccak256(abi.encode(AtumPaymentParams))`. Zero when nothing is staged.
+    /// @dev Certora L-04. `execute` refuses a different route while the token balance is
+    ///      non-zero, because the module holds one fungible balance per token and the keeper
+    ///      sweeps all of it -- so funds staged for one destination would otherwise be payable to
+    ///      the next one configured. Cleared by `returnTokenBalance`.
+    function stagedRoute(address token) external view returns (bytes32);
+
+    /// @notice Re-points the Permit2 allowance at the module's current balance.
+    /// @dev Keeper-only recovery path for funds that arrive outside `execute` -- Escrow refunds
+    ///      and failed deposits. Without it those funds are unreachable whenever PaymentRails
+    ///      has nothing left to pull, because the allowance was only ever refreshed by `execute`
+    ///      (Certora L-02). Returns the new allowance, which equals the module's balance.
+    function syncAllowance(address token) external returns (uint256 available);
+
     /// @notice Returns whether a Permit2 digest has been permanently invalidated.
     function isPermitDigestInvalidated(bytes32 digest) external view returns (bool);
 
-    /// @notice Cumulative pending source amount per token, used to scope the Permit2 allowance.
-    /// @dev Incremented by `execute`, reset to 0 by `returnTokenBalance` (which also revokes
-    ///      Permit2 to 0). Monotonically increasing between recovery sweeps. The actual
-    ///      pullable amount is bounded below by `IERC20.balanceOf(this)`.
+    /// @notice Source amount per token that Permit2 is currently approved to pull.
+    /// @dev Set by `execute` and `syncAllowance` to the module's CURRENT balance, and reset to 0
+    ///      by `returnTokenBalance` (which also revokes Permit2 to 0). It is NOT a cumulative
+    ///      counter: it was one until Certora L-03/I-05, and a monotonic counter necessarily
+    ///      disagrees with the balance in both directions -- too high after Permit2 pulls, too
+    ///      low after a refund or a donation, the latter bricking the keeper's request against a
+    ///      smaller allowance. The invariant now is
+    ///      `pendingAmount(token) == IERC20(token).allowance(this, permit2) == balanceOf(this)`
+    ///      as of the last `execute` or `syncAllowance`.
     function pendingAmount(address token) external view returns (uint256);
 
     /// @notice Owner-only keeper rotation.
