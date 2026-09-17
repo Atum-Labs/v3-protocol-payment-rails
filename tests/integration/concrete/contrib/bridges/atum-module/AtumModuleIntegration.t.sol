@@ -177,6 +177,15 @@ contract AtumModuleIntegrationTest is Test {
         new AtumModule(address(permit2), address(nodeContract), moduleOwner, keeper);
     }
 
+    /// The constructor used to reject an EOA Permit2 only as a side effect of calling
+    /// DOMAIN_SEPARATOR() on it. That call was dead state and was removed, so the check is now
+    /// explicit and must keep holding.
+    function test_Constructor_RevertsWhenPermit2HasNoCode() external {
+        address eoa = makeAddr("notAContract");
+        vm.expectRevert(abi.encodeWithSelector(Errors.AtumModule_Permit2NotContract.selector, eoa));
+        new AtumModule(eoa, address(nodeContract), moduleOwner, keeper);
+    }
+
     /// I-02. Renouncing strands every recovery path: keeper rotation, pause/unpause and the
     /// `onlyOwner whenPaused` sweep all require an owner.
     function test_RenounceOwnership_Reverts() external {
@@ -396,7 +405,6 @@ contract AtumModuleIntegrationTest is Test {
 
     function test_Constructor_StoresImmutableState() external view {
         assertEq(module.permit2(), address(permit2));
-        assertEq(module.permit2DomainSeparator(), PERMIT2_DOMAIN_SEPARATOR);
         assertEq(module.paymentRails(), address(nodeContract));
         assertEq(module.owner(), moduleOwner);
         assertEq(module.keeper(), keeper);

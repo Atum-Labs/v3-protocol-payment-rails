@@ -117,6 +117,13 @@ library Errors {
     /// @notice Thrown when the Permit2 address is the zero address in the constructor.
     error AtumModule_ZeroPermit2();
 
+    /// @notice Thrown when the Permit2 address supplied to an AtumModule has no code.
+    /// @dev The module used to reject an EOA only as a side effect of calling DOMAIN_SEPARATOR()
+    ///      on it in the constructor. That call was dead state (it was stored and never read) and
+    ///      has been removed, so the check it accidentally provided is now explicit. The factory
+    ///      has an equivalent check of its own; this one covers modules constructed directly.
+    error AtumModule_Permit2NotContract(address permit2);
+
     /// @notice Thrown when `renounceOwnership` is called on an AtumModule.
     /// @dev The module must always retain an owner: keeper rotation, pause/unpause and the
     ///      `onlyOwner whenPaused` recovery sweep all depend on one existing.

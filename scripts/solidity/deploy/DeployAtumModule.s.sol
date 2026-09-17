@@ -35,7 +35,6 @@ contract DeployAtumModule is BaseScript {
         console2.log("PaymentRails:                     ", paymentRails);
         console2.log("Permit2:                  ", permit2);
         console2.log("AtumModule:               ", address(module));
-        console2.log("Permit2 Domain Separator: ", vm.toString(module.permit2DomainSeparator()));
         console2.log("");
         console2.log("Save to .env:");
         console2.log("  ATUM_MODULE=%s", vm.toString(address(module)));
