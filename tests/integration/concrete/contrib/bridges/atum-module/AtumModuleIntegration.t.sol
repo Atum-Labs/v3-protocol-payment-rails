@@ -165,6 +165,68 @@ contract AtumModuleIntegrationTest is Test {
         assertEq(module.pendingAmount(address(sourceToken)), expected, "pendingAmount");
     }
 
+    /// L-04. A route change must not redirect funds already staged for the previous route.
+    ///
+    /// The module holds one fungible balance per token and the keeper sweeps all of it, so
+    /// reconfiguring PaymentRails between an intent and its settlement used to make the whole
+    /// balance -- including tokens staged for Route A -- payable to Route B. Nothing on chain
+    /// recorded which route the staged funds belonged to.
+    function test_ExecuteAction_RefusesNewRouteWhileFundsAreStaged() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+        assertEq(sourceToken.balanceOf(address(module)), PAYMENT_AMOUNT, "route A staged");
+
+        _configureRouteB();
+
+        vm.prank(executor);
+        bool success = nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT);
+
+        assertFalse(success, "route B must not stage on top of route A funds");
+        assertEq(sourceToken.balanceOf(address(module)), PAYMENT_AMOUNT, "no extra funds pulled");
+        assertEq(module.stagedRoute(address(sourceToken)), _routeHash(_defaultParams()), "route A still staged");
+    }
+
+    /// The guard is scoped to staged funds, not to route changes as such. Once the balance is
+    /// drained the module is free to take the new route -- otherwise this would be a permanent
+    /// lock rather than an ordering constraint.
+    function test_ExecuteAction_AllowsNewRouteOnceBalanceIsDrained() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+        permit2.pull(address(sourceToken), address(module), escrow, PAYMENT_AMOUNT);
+        assertEq(sourceToken.balanceOf(address(module)), 0, "drained");
+
+        DataTypes.AtumPaymentParams memory routeB = _configureRouteB();
+
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT), "route B allowed once empty");
+        assertEq(module.stagedRoute(address(sourceToken)), _routeHash(routeB), "route B staged");
+    }
+
+    /// Repeating the SAME route must keep working -- the guard compares routes, not call counts.
+    function test_ExecuteAction_SameRouteStagesRepeatedly() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+
+        assertEq(sourceToken.balanceOf(address(module)), PAYMENT_AMOUNT * 2);
+        assertEq(module.stagedRoute(address(sourceToken)), _routeHash(_defaultParams()));
+    }
+
+    /// The recovery sweep empties the module, so the recorded route must not outlive the funds.
+    function test_ReturnTokenBalance_ClearsStagedRoute() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+        assertTrue(module.stagedRoute(address(sourceToken)) != bytes32(0), "staged");
+
+        vm.prank(moduleOwner);
+        module.pause();
+        vm.prank(moduleOwner);
+        module.returnTokenBalance(address(sourceToken));
+
+        assertEq(module.stagedRoute(address(sourceToken)), bytes32(0), "cleared with the funds");
+    }
+
     /// L-02. A refund that arrives while PaymentRails is empty used to be unreachable: the
     /// allowance was only refreshed by `execute`, and `execute` needs a positive pull.
     function test_SyncAllowance_RecoversRefundWhenPaymentRailsIsEmpty() external {
@@ -886,6 +948,24 @@ contract AtumModuleIntegrationTest is Test {
             destinationAccount: DESTINATION_ACCOUNT,
             destinationAsset: DESTINATION_ASSET
         });
+    }
+
+    /// Points PaymentRails at a DIFFERENT destination, returning the new params.
+    function _configureRouteB() internal returns (DataTypes.AtumPaymentParams memory routeB) {
+        routeB = DataTypes.AtumPaymentParams({
+            destinationChain: DESTINATION_CHAIN,
+            destinationAccount: "0x2222222222222222222222222222222222222222",
+            destinationAsset: DESTINATION_ASSET
+        });
+        // Encode BEFORE the prank: `encodeParams` is itself a call and would consume it,
+        // leaving `configureToken` to run as the test contract and revert on Ownable.
+        bytes memory encoded = module.encodeParams(routeB);
+        vm.prank(nodeOwner);
+        nodeContract.configureToken(address(sourceToken), "ATUM_PAYMENT", address(module), MIN_BALANCE, encoded, true);
+    }
+
+    function _routeHash(DataTypes.AtumPaymentParams memory params) internal pure returns (bytes32) {
+        return keccak256(abi.encode(params));
     }
 
     function _defaultEncodedParams() internal view returns (bytes memory) {
