@@ -75,6 +75,14 @@ interface IAtumModule is IActionModule, IERC1271 {
     ///      coordinated deploy and not a drop-in.
     function keeperDigest(bytes32 permit2Digest) external view returns (bytes32);
 
+    /// @notice Destination route the currently-staged balance was pulled for, as
+    ///         `keccak256(abi.encode(AtumPaymentParams))`. Zero when nothing is staged.
+    /// @dev Certora L-04. `execute` refuses a different route while the token balance is
+    ///      non-zero, because the module holds one fungible balance per token and the keeper
+    ///      sweeps all of it -- so funds staged for one destination would otherwise be payable to
+    ///      the next one configured. Cleared by `returnTokenBalance`.
+    function stagedRoute(address token) external view returns (bytes32);
+
     /// @notice Re-points the Permit2 allowance at the module's current balance.
     /// @dev Keeper-only recovery path for funds that arrive outside `execute` -- Escrow refunds
     ///      and failed deposits. Without it those funds are unreachable whenever PaymentRails

@@ -101,6 +101,9 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
     ///      `returnTokenBalance` (which also revokes the Permit2 allowance to 0).
     mapping(address token => uint256 amount) public override pendingAmount;
 
+    /// @inheritdoc IAtumModule
+    mapping(address token => bytes32 route) public override stagedRoute;
+
     /*//////////////////////////////////////////////////////////////////////////
                                   CONSTRUCTOR
     //////////////////////////////////////////////////////////////////////////*/
@@ -156,7 +159,31 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
             return _failedResult(token, "Insufficient balance");
         }
 
+        // Certora L-04: a route change must not silently redirect funds already staged for the
+        // previous one.
+        //
+        // The module holds one fungible balance per token and the keeper is documented to sweep
+        // ALL of it (see the note on refunds below), so tokens pulled while Route A was configured
+        // are indistinguishable from tokens pulled under Route B. Change the PaymentRails config
+        // between an intent and its settlement and the next intent advertises the whole balance
+        // against the new destination -- including the funds staged for the old one.
+        //
+        // Certora's own recommendation was to emit only the newly-pulled amount, but that
+        // contradicts the documented sweep the report quotes under L-02: refunds and failed
+        // deposits are meant to be picked up by a later request. Both cannot hold. This keeps the
+        // sweep and makes the collision impossible instead, by refusing to stage a second route
+        // on top of a non-empty balance. Drain or sweep first, then reconfigure.
+        //
+        // Keyed on the decoded destination triple rather than the raw `params` bytes, so the guard
+        // tracks the ROUTE and not its encoding.
+        bytes32 routeHash = keccak256(abi.encode(paymentParams));
+        bytes32 staged = stagedRoute[token];
+        if (staged != bytes32(0) && staged != routeHash && IERC20(token).balanceOf(address(this)) > 0) {
+            return _failedResult(token, "Route changed while funds are staged");
+        }
+
         _pullExactToken(token, amount);
+        stagedRoute[token] = routeHash;
 
         // ONE quantity drives the allowance, the emitted intent and `pendingAmount`: the balance
         // the module actually holds right now (Certora L-03 + I-05).
@@ -463,6 +490,9 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
         // Permit2 allowance so an already-signed-but-uninvalidated digest can't
         // re-pull anything that arrives later (refund, mistaken transfer).
         pendingAmount[token] = 0;
+        // The balance is now zero, so the L-04 guard would pass regardless; clearing keeps the
+        // recorded route from outliving the funds it described.
+        stagedRoute[token] = bytes32(0);
         IERC20(token).forceApprove(permit2, 0);
         emit Permit2ApprovalSet(token, permit2, 0);
 
