@@ -2,7 +2,6 @@
 pragma solidity ^0.8.29;
 
 import { IAtumModule } from "../../../interfaces/IAtumModule.sol";
-import { IPermit2 } from "../../../interfaces/IPermit2.sol";
 import { IActionModule } from "../../../interfaces/IActionModule.sol";
 import { ActionModuleBase } from "../../../abstracts/ActionModuleBase.sol";
 import { DataTypes } from "../../../types/DataTypes.sol";
@@ -73,9 +72,6 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
     address public immutable override permit2;
 
     /// @inheritdoc IAtumModule
-    bytes32 public immutable override permit2DomainSeparator;
-
-    /// @inheritdoc IAtumModule
     address public immutable override paymentRails;
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -125,10 +121,18 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
         if (_paymentRails == address(0)) revert Errors.AtumModule_ZeroPaymentRails();
         if (_keeper == address(0)) revert Errors.AtumModule_ZeroKeeper();
 
+        // Explicit, where it used to be a side effect. The constructor previously called
+        // `DOMAIN_SEPARATOR()` on this address and stored the result in an immutable that nothing
+        // ever read -- dead state the audit did not flag. Removing it would also have removed the
+        // EOA rejection it incidentally provided (the call reverts against an address with no
+        // code), so the check is stated directly instead. Caching a domain separator would have
+        // been wrong to keep in any case: Permit2 rebuilds its separator when `chainid` changes,
+        // so a value fixed at construction goes stale across a fork.
+        if (_permit2.code.length == 0) revert Errors.AtumModule_Permit2NotContract(_permit2);
+
         permit2 = _permit2;
         paymentRails = _paymentRails;
         keeper = _keeper;
-        permit2DomainSeparator = IPermit2(_permit2).DOMAIN_SEPARATOR();
 
         // The initial keeper is the hot key that authorises moving every token this module holds,
         // and it was previously assigned without ever being emitted (Certora I-03): `KeeperSet`
