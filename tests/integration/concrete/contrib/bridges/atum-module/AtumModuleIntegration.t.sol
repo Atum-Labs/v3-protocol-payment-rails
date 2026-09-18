@@ -112,6 +112,59 @@ contract AtumModuleIntegrationTest is Test {
                         CERTORA AUDIT REGRESSIONS (DRAFT, SEP 2026)
     //////////////////////////////////////////////////////////////////////////*/
 
+    /// I-05. One wei, sent by anyone, used to brick a fresh module.
+    ///
+    /// The allowance followed `pendingAmount` (the sum of amounts pulled through `execute`) while
+    /// the emitted intent followed `balanceOf`. A donation lands in the balance and not in the
+    /// counter, so the keeper read the larger number off the event, asked Permit2 for it, and the
+    /// pull reverted against the smaller allowance -- for every payment, until an owner swept.
+    ///
+    /// The assertion that matters is the last one: the amount advertised in the intent must be
+    /// pullable. Under the old code it was not.
+    function test_ExecuteAction_DonatedWeiDoesNotBrickTheIntent() external {
+        sourceToken.mint(address(module), 1);
+
+        uint256 expected = PAYMENT_AMOUNT + 1;
+
+        vm.expectEmit(true, false, false, true);
+        emit AtumIntentCreated(
+            address(sourceToken), expected, DESTINATION_CHAIN, DESTINATION_ACCOUNT, DESTINATION_ASSET
+        );
+
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+
+        assertEq(sourceToken.balanceOf(address(module)), expected, "balance");
+        assertEq(sourceToken.allowance(address(module), address(permit2)), expected, "allowance");
+        assertEq(module.pendingAmount(address(sourceToken)), expected, "pendingAmount");
+
+        // The whole point: what the intent advertised is actually pullable.
+        permit2.pull(address(sourceToken), address(module), escrow, expected);
+        assertEq(sourceToken.balanceOf(escrow), expected);
+    }
+
+    /// L-03. `pendingAmount` was never decremented when Permit2 spent, so the allowance drifted
+    /// above the funds the module still held. After a pull, a second execute must approve what
+    /// the module has -- not the historical total.
+    function test_ExecuteAction_AllowanceFollowsBalanceAfterEscrowPull() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+
+        permit2.pull(address(sourceToken), address(module), escrow, ESCROW_PULL_AMOUNT);
+
+        uint256 remaining = PAYMENT_AMOUNT - ESCROW_PULL_AMOUNT;
+        assertEq(sourceToken.balanceOf(address(module)), remaining, "balance after pull");
+
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+
+        uint256 expected = remaining + PAYMENT_AMOUNT;
+        assertEq(sourceToken.balanceOf(address(module)), expected, "balance");
+        // Cumulative would be PAYMENT_AMOUNT * 2 here, which the module does not hold.
+        assertEq(sourceToken.allowance(address(module), address(permit2)), expected, "allowance");
+        assertEq(module.pendingAmount(address(sourceToken)), expected, "pendingAmount");
+    }
+
     /// M-01, the finding itself. An authorisation for one module must be worthless at another
     /// module sharing the same keeper.
     ///
@@ -248,13 +301,12 @@ contract AtumModuleIntegrationTest is Test {
 
         assertTrue(success);
         assertEq(sourceToken.balanceOf(address(module)), PAYMENT_AMOUNT);
-        // Permit2 allowance is now scoped to the cumulative pending amount,
-        // not type(uint256).max.
+        // Permit2 allowance is scoped to the module's available balance, not type(uint256).max.
         assertEq(sourceToken.allowance(address(module), address(permit2)), PAYMENT_AMOUNT);
         assertEq(module.pendingAmount(address(sourceToken)), PAYMENT_AMOUNT);
     }
 
-    function test_ExecuteAction_ScopesPermit2ApprovalToCumulativePending() external {
+    function test_ExecuteAction_ScopesPermit2ApprovalToAvailableBalance() external {
         vm.prank(executor);
         assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
 
@@ -265,7 +317,7 @@ contract AtumModuleIntegrationTest is Test {
         assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
 
         assertEq(sourceToken.balanceOf(address(module)), PAYMENT_AMOUNT * 2);
-        // Second execute grows the allowance/pending to the cumulative total.
+        // With nothing pulled in between, the balance IS the sum of both executes.
         assertEq(sourceToken.allowance(address(module), address(permit2)), PAYMENT_AMOUNT * 2);
         assertEq(module.pendingAmount(address(sourceToken)), PAYMENT_AMOUNT * 2);
     }

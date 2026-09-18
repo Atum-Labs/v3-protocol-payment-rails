@@ -158,19 +158,32 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
 
         _pullExactToken(token, amount);
 
-        // Cap the Permit2 allowance to actual cumulative pending. Each `execute`
-        // grows `pendingAmount[token]`; Permit2 pulls reduce the on-chain allowance
-        // as Escrow drains. `forceApprove` sets the new ceiling absolutely, so an
-        // un-drained prior allowance gets bumped to the new total (not double-added).
-        pendingAmount[token] += amount;
-        uint256 newAllowance = pendingAmount[token];
-        IERC20(token).forceApprove(permit2, newAllowance);
-        emit Permit2ApprovalSet(token, permit2, newAllowance);
+        // ONE quantity drives the allowance, the emitted intent and `pendingAmount`: the balance
+        // the module actually holds right now (Certora L-03 + I-05).
+        //
+        // Before this, the allowance followed a monotonic counter (`pendingAmount += amount`,
+        // never decremented) while the intent followed `balanceOf`. Those are different numbers
+        // and they drifted apart in BOTH directions:
+        //
+        //   * after Permit2 pulled, the balance dropped and the counter did not, so the module
+        //     advertised an allowance over funds it no longer held;
+        //   * after an Escrow refund or a 1-wei donation, the balance rose above the counter, so
+        //     the keeper read the larger number off the event, requested it, and Permit2's
+        //     `transferFrom` reverted against the smaller allowance -- which bricked a fresh
+        //     module for the price of one wei.
+        //
+        // Deriving all three from the balance makes the post-condition trivially true:
+        // `pendingAmount[token] == allowance(permit2) == balanceOf(this)`. A donation is then
+        // harmless rather than fatal -- it is simply money the module really has, which is what
+        // the sweep behaviour documented on `execute` already assumes.
+        uint256 available = IERC20(token).balanceOf(address(this));
+        pendingAmount[token] = available;
+        IERC20(token).forceApprove(permit2, available);
+        emit Permit2ApprovalSet(token, permit2, available);
 
-        uint256 availableSourceAmount = IERC20(token).balanceOf(address(this));
         emit AtumIntentCreated(
             token,
-            availableSourceAmount,
+            available,
             paymentParams.destinationChain,
             paymentParams.destinationAccount,
             paymentParams.destinationAsset
