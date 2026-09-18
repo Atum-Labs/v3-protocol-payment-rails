@@ -37,6 +37,8 @@ interface IAtumModuleFactory {
     /// - `owner` must not be `address(0)`
     /// - `paymentRails` must not be `address(0)`
     /// - `keeper` must not be `address(0)`
+    /// - `paymentRails` must be a contract
+    /// - the caller must be `Ownable(paymentRails).owner()` (Certora L-01)
     ///
     /// @param owner The initial owner of the AtumModule (can rotate the keeper and pause).
     /// @param paymentRails The PaymentRails instance authorized to call the module's execute().
@@ -52,7 +54,11 @@ interface IAtumModuleFactory {
     /// - `owner` must not be `address(0)`
     /// - `paymentRails` must not be `address(0)`
     /// - `keeper` must not be `address(0)`
-    /// - The `(owner, paymentRails, keeper, salt)` combination must not have been used before
+    /// - `paymentRails` must be a contract
+    /// - the caller must be `Ownable(paymentRails).owner()` (Certora L-01)
+    /// - The `(msg.sender, owner, paymentRails, keeper, salt)` combination must not have been used
+    ///   before. The caller is part of the key because the CREATE2 salt is bound to it
+    ///   (Certora I-04), so the same salt used by two deployers yields two distinct addresses.
     ///
     /// @param owner The initial owner of the AtumModule (can rotate the keeper and pause).
     /// @param paymentRails The PaymentRails instance authorized to call the module's execute().
