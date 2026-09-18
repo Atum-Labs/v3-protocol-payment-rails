@@ -4,6 +4,7 @@ pragma solidity ^0.8.29;
 import { AtumModuleFactoryBase } from "../AtumModuleFactoryBase.t.sol";
 import { AtumModule } from "../../../../../../../src/modules/contrib/bridges/AtumModule.sol";
 import { Errors } from "../../../../../../../src/libraries/Errors.sol";
+import { Vm } from "forge-std/src/Vm.sol";
 
 contract Create_AtumModuleFactory_Test is AtumModuleFactoryBase {
     function test_RevertWhen_OwnerIsZeroAddress() external {
@@ -67,8 +68,9 @@ contract Create_AtumModuleFactory_Test is AtumModuleFactoryBase {
 
     function test_WhenParamsAreValid_ShouldEmitEvent() external {
         // Check topic2 (paymentRails) and topic3 (owner) without asserting topic1 (unpredictable CREATE address).
+        // The final `true` checks the data field, which is now the initial keeper (Certora I-03).
         vm.expectEmit(false, true, true, true);
-        emit AtumModuleCreated(address(0), paymentRails, owner);
+        emit AtumModuleCreated(address(0), paymentRails, owner, keeper);
 
         factory.create(owner, paymentRails, keeper);
     }
@@ -101,6 +103,28 @@ contract Create_AtumModuleFactory_Test is AtumModuleFactoryBase {
         assertEq(modules.length, 2);
         assertEq(modules[0], module1);
         assertEq(modules[1], module2);
+    }
+
+    /// I-03, the factory half. The initial keeper authorises moving every token the module will
+    /// hold and was absent from this event, so an indexer following factory deployments could not
+    /// record which key could sign for a module without also watching the module's own logs.
+    function test_Create_EmitsTheInitialKeeper() external {
+        address distinctKeeper = makeAddr("distinctKeeper");
+
+        vm.recordLogs();
+        factory.create(owner, paymentRails, distinctKeeper);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 topic = keccak256("AtumModuleCreated(address,address,address,address)");
+
+        bool found;
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics[0] == topic) {
+                assertEq(abi.decode(logs[i].data, (address)), distinctKeeper, "keeper must be in the event data");
+                found = true;
+            }
+        }
+        assertTrue(found, "AtumModuleCreated not emitted");
     }
 
     /// L-01. Creation was permissionless, so anyone could deploy a genuine factory module naming

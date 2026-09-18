@@ -168,6 +168,15 @@ contract AtumModuleIntegrationTest is Test {
         assertEq(module.pendingAmount(address(sourceToken)), expected, "pendingAmount");
     }
 
+    /// I-03. The first keeper -- the key that authorises moving every token the module holds --
+    /// was assigned without ever being emitted, so logs alone could not answer who could sign.
+    function test_Constructor_EmitsInitialKeeper() external {
+        vm.expectEmit(true, true, false, false);
+        emit KeeperSet(address(0), keeper);
+
+        new AtumModule(address(permit2), address(nodeContract), moduleOwner, keeper);
+    }
+
     /// I-02. Renouncing strands every recovery path: keeper rotation, pause/unpause and the
     /// `onlyOwner whenPaused` sweep all require an owner.
     function test_RenounceOwnership_Reverts() external {

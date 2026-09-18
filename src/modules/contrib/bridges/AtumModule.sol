@@ -129,6 +129,13 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
         paymentRails = _paymentRails;
         keeper = _keeper;
         permit2DomainSeparator = IPermit2(_permit2).DOMAIN_SEPARATOR();
+
+        // The initial keeper is the hot key that authorises moving every token this module holds,
+        // and it was previously assigned without ever being emitted (Certora I-03): `KeeperSet`
+        // only fired on rotation, so an indexer reconstructing "who could sign for this module"
+        // had no record of the first one. Emitting from zero makes the whole keeper history
+        // recoverable from logs alone.
+        emit KeeperSet(address(0), _keeper);
     }
 
     /// @notice Disabled: this module must always retain an owner.

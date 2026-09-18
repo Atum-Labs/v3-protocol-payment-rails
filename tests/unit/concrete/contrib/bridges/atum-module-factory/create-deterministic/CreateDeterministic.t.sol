@@ -59,7 +59,7 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
             factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT);
 
         vm.expectEmit(true, true, true, true);
-        emit AtumModuleCreated(predicted, paymentRails, owner);
+        emit AtumModuleCreated(predicted, paymentRails, owner, keeper);
 
         factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
     }
