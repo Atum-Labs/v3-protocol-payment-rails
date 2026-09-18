@@ -12,11 +12,15 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 /// @custom:audit-status unaudited
 /// @author Credit Cooperative
 /// @notice See the documentation in {IAtumModuleFactory}.
-/// @dev `create`/`createDeterministic` are permissionless: anyone can deploy an AtumModule and it is
-///      recorded in the registry. The registry is informational only — membership is NOT an
-///      authorization or trust signal, and `_deployedModules` grows unbounded. Consumers must verify
-///      a module's `owner`/`keeper`/`paymentRails` wiring rather than trusting registry presence, and
-///      read `getDeployedModules` offchain (it returns the full array).
+/// @dev `create`/`createDeterministic` require the caller to be the owner of the supplied
+///      PaymentRails (Certora L-01); they were permissionless until that finding, which let anyone
+///      record a module against another party's PaymentRails. The registry is still informational
+///      only — membership is NOT an authorization or trust signal, and `_deployedModules` grows
+///      unbounded. Consumers must verify a module's `owner`/`keeper`/`paymentRails` wiring rather
+///      than trusting registry presence, and read `getDeployedModules` offchain (it returns the
+///      full array). Note the owner check constrains who may WRITE to the registry; it does not
+///      make presence in it meaningful, and a module deployed directly rather than through this
+///      factory is unaffected by it.
 contract AtumModuleFactory is IAtumModuleFactory {
     /*//////////////////////////////////////////////////////////////////////////
                                 IMMUTABLE STATE

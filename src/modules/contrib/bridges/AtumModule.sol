@@ -88,13 +88,18 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
     mapping(bytes32 digest => bool invalidated) private _invalidatedPermitDigests;
 
     /// @inheritdoc IAtumModule
-    /// @dev Cumulative source tokens routed in via `execute` minus what's been returned
-    ///      to PaymentRails via `returnTokenBalance`. Used to cap the Permit2 ERC-20
-    ///      allowance to actual pending instead of `type(uint256).max`. Permit2 itself
-    ///      reduces the on-chain allowance as Atum Escrow pulls funds, so the *effective*
-    ///      pullable amount is `min(allowance(this, permit2), balanceOf(this))`. This
-    ///      value is monotonically increasing between recovery sweeps; reset only by
-    ///      `returnTokenBalance` (which also revokes the Permit2 allowance to 0).
+    /// @dev The source amount Permit2 is currently approved to pull, used to cap that allowance
+    ///      instead of granting `type(uint256).max`. Set by `execute` and `syncAllowance` to the
+    ///      module's CURRENT balance, and reset to 0 by `returnTokenBalance` (which also revokes
+    ///      the Permit2 allowance to 0).
+    ///
+    ///      NOT a cumulative counter. It was one until Certora L-03/I-05: the allowance followed
+    ///      the counter while the emitted intent followed the balance, and the two necessarily
+    ///      disagreed in both directions -- the counter too high after Permit2 pulled, too low
+    ///      after a refund or a donation, the latter bricking the keeper's request against a
+    ///      smaller allowance. All three now derive from one quantity, so the invariant is
+    ///      `pendingAmount[token] == allowance(this, permit2) == balanceOf(this)` as of the last
+    ///      `execute` or `syncAllowance`.
     mapping(address token => uint256 amount) public override pendingAmount;
 
     /// @inheritdoc IAtumModule
@@ -522,7 +527,7 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
         amountReturned = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransfer(paymentRails, amountReturned);
 
-        // Recovery sweep clears the cumulative pending tracker and revokes the
+        // Recovery sweep clears the pending-amount tracker and revokes the
         // Permit2 allowance so an already-signed-but-uninvalidated digest can't
         // re-pull anything that arrives later (refund, mistaken transfer).
         pendingAmount[token] = 0;
