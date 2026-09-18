@@ -9,8 +9,10 @@ import { IERC1271 } from "@openzeppelin/contracts/interfaces/IERC1271.sol";
 /// @notice Minimal PaymentRails-bound Atum payment contract and ERC-1271 Permit2 owner.
 /// @dev One module deployment is bound to one immutable PaymentRails. The PaymentRails funds the
 ///      contract through `execute`; the module emits the current available source
-///      balance and destination details for an offchain keeper, and validates raw
-///      Permit2 digests by keeper signature.
+///      balance and destination details for an offchain keeper, and accepts raw Permit2
+///      digests at its ERC-1271 surface. Those digests are validated against a
+///      MODULE-SPECIFIC EIP-712 wrap of the digest rather than the digest itself, so the
+///      keeper signs {keeperDigest} (Certora M-01).
 ///
 ///      The module does not compute request ids, source assets, fulfillment amounts,
 ///      or fees. The keeper derives source details from the log context and prepares
@@ -18,7 +20,10 @@ import { IERC1271 } from "@openzeppelin/contracts/interfaces/IERC1271.sol";
 ///
 ///      Failed deposits, refunds, and unused source balances remain in the module. The
 ///      keeper should watch {AtumIntentCreated}, Atum Escrow refund events, and module
-///      token balances to initiate new payment requests from the available balance.
+///      token balances to initiate new payment requests from the available balance. For
+///      funds that arrive outside `execute`, the keeper must call {syncAllowance} first:
+///      the Permit2 allowance does not move with the balance, so an unsynced refund is
+///      visible but not pullable.
 interface IAtumModule is IActionModule, IERC1271 {
     /// @notice Emitted when the module approves Permit2 for a source token.
     event Permit2ApprovalSet(address indexed token, address indexed permit2, uint256 amount);
@@ -52,7 +57,9 @@ interface IAtumModule is IActionModule, IERC1271 {
     /// @notice Immutable PaymentRails allowed to call `execute` and receive fail-safe recovery returns.
     function paymentRails() external view returns (address);
 
-    /// @notice Keeper that signs Permit2 digests and invalidates abandoned digests.
+    /// @notice Keeper that authorises Permit2 digests and invalidates abandoned ones.
+    /// @dev Signs {keeperDigest} of a Permit2 digest, not the Permit2 digest itself (Certora
+    ///      M-01). Also the sole caller of {syncAllowance}.
     function keeper() external view returns (address);
 
     /// @notice EIP-712 type hash for the keeper's approval of a Permit2 digest.
@@ -85,9 +92,17 @@ interface IAtumModule is IActionModule, IERC1271 {
     ///      and failed deposits. Without it those funds are unreachable whenever PaymentRails
     ///      has nothing left to pull, because the allowance was only ever refreshed by `execute`
     ///      (Certora L-02). Returns the new allowance, which equals the module's balance.
+    ///
+    ///      Callable only by the keeper and only while NOT paused, so it cannot contend with
+    ///      `returnTokenBalance`, which is owner-only while paused and revokes the allowance to
+    ///      zero. Does not change {stagedRoute}: it restores the allowance and does not stage a
+    ///      new destination.
     function syncAllowance(address token) external returns (uint256 available);
 
     /// @notice Returns whether a Permit2 digest has been permanently invalidated.
+    /// @dev Keyed on the RAW Permit2 digest, not on {keeperDigest} of it. The EIP-712 wrap
+    ///      introduced for Certora M-01 changed what is validated, deliberately not what is
+    ///      looked up here.
     function isPermitDigestInvalidated(bytes32 digest) external view returns (bool);
 
     /// @notice Source amount per token that Permit2 is currently approved to pull.
@@ -106,19 +121,26 @@ interface IAtumModule is IActionModule, IERC1271 {
 
     /// @notice Owner-only pause.
     /// @dev While paused, `execute` is blocked, `validate` fails, ERC-1271 validation rejects
-    ///      all signatures, and return-to-PaymentRails recovery is enabled.
+    ///      all signatures, {syncAllowance} is blocked, and return-to-PaymentRails recovery is
+    ///      enabled.
     function pause() external;
 
     /// @notice Owner-only unpause after abandoned floating Permit2 digests have been invalidated or expired.
     function unpause() external;
 
     /// @notice Keeper- or owner-callable permanent invalidation of an abandoned Permit2 digest.
+    /// @dev Pass the RAW Permit2 digest -- the same value Permit2 presents to `isValidSignature`
+    ///      -- not {keeperDigest} of it. Passing the wrapped digest records a revocation that
+    ///      will never be consulted, leaving the intended digest live.
     function invalidateDigest(bytes32 digest) external;
 
     /// @notice Keeper- or owner-callable permanent invalidation of multiple abandoned Permit2 digests.
+    /// @dev Raw Permit2 digests, as for {invalidateDigest}.
     function invalidateDigests(bytes32[] calldata digests) external;
 
     /// @notice Owner-only paused recovery that returns the full current token balance to the immutable PaymentRails.
+    /// @dev Also resets {pendingAmount} and {stagedRoute} to zero and revokes the Permit2
+    ///      allowance, so no recorded approval or destination outlives the funds it described.
     function returnTokenBalance(address token) external returns (uint256 amountReturned);
 
     /// @notice Owner-only paused recovery: returns full current balances for multiple tokens to the immutable

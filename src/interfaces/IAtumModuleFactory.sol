@@ -83,13 +83,15 @@ interface IAtumModuleFactory {
     function permit2() external view returns (address);
 
     /// @notice Predict the address of a deterministic deployment.
+    /// @param deployer The address that will call {createDeterministic}. The salt is bound to it
+    ///        (Certora I-04), so the predicted address differs per deployer. Passed explicitly
+    ///        rather than taken from `msg.sender` because prediction is an off-chain read and the
+    ///        party asking is usually not the party deploying.
     /// @param owner The initial owner that would be passed to {createDeterministic}.
     /// @param paymentRails The PaymentRails that would be passed to {createDeterministic}.
     /// @param keeper The keeper that would be passed to {createDeterministic}.
     /// @param salt The salt that would be passed to {createDeterministic}.
     /// @return predicted The address where the AtumModule would be deployed.
-    /// @param deployer Address that will call `createDeterministic`. The salt is bound to it
-    ///        (Certora I-04), so the predicted address differs per deployer.
     function predictDeterministicAddress(
         address deployer,
         address owner,
