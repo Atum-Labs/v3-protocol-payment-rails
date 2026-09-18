@@ -117,6 +117,11 @@ library Errors {
     /// @notice Thrown when the Permit2 address is the zero address in the constructor.
     error AtumModule_ZeroPermit2();
 
+    /// @notice Thrown when a transfer debited the sender by something other than `amount`.
+    /// @dev Certora I-06. The received amount was already checked; this covers the other side,
+    ///      where a sender-paid fee leaves PaymentRails down more than the module gained.
+    error AtumModule_UnsupportedTokenDebitedAmount(uint256 expected, uint256 debited);
+
     /// @notice Thrown when the immutable PaymentRails address is the zero address in the constructor.
     error AtumModule_ZeroPaymentRails();
 
