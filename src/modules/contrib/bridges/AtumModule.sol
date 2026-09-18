@@ -20,8 +20,11 @@ import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 /// @notice Minimal PaymentRails-bound Atum payment contract and ERC-1271 Permit2 owner.
 /// @dev Each module deployment is permanently bound to one immutable PaymentRails. The module
 ///      is funded by that PaymentRails through `execute`, emits the current available source
-///      balance and destination details for an offchain Atum keeper, and validates
-///      generic Permit2 digests by keeper signature.
+///      balance and destination details for an offchain Atum keeper, and accepts generic
+///      Permit2 digests at its ERC-1271 surface. A digest is validated against a
+///      MODULE-SPECIFIC EIP-712 wrap of it rather than against the digest itself, so the keeper
+///      signs `keeperDigest(...)` (Certora M-01). Digest invalidation stays keyed on the raw
+///      digest.
 ///
 ///      The module does not call Atum Escrow, compute request ids, compute fulfillment
 ///      amounts, decode Atum witness data, inspect Escrow state, classify payment
@@ -37,17 +40,26 @@ import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 ///      unused source balances remain in the module and can be picked up by a later
 ///      keeper request.
 ///
+///      Because that sweep pays out the whole balance, `execute` will NOT stage a second
+///      destination on top of a non-empty balance: it records the route the current balance was
+///      pulled for in `stagedRoute` and returns a failed result if PaymentRails is reconfigured
+///      to a different one while funds are still held (Certora L-04). Drain or sweep first, then
+///      reconfigure.
+///
 ///      Keeper operating flow:
 ///      - Watch {AtumIntentCreated}; when emitted, read/use `availableSourceAmount` and
 ///        prepare a payment request for the available source balance.
 ///      - Watch Atum Escrow refund events and module token balances; when refunded
-///        funds return, initiate a new payment request for the current module balance.
+///        funds return, call `syncAllowance(token)` and then initiate a new payment request
+///        for the current module balance. The allowance does not track inbound transfers, so
+///        without the sync the refund is visible but not pullable (Certora L-02).
 ///      - Invalidate abandoned floating Permit2 digests before signing replacement
-///        requests when those stale digests must not remain usable.
+///        requests when those stale digests must not remain usable. Invalidate the RAW
+///        Permit2 digest, not `keeperDigest(...)` of it.
 ///
 ///      Pause is a rare fail-safe control for return-to-PaymentRails recovery. It blocks
-///      new `execute` calls and ERC-1271 validation, makes `validate` fail, and enables
-///      return-to-PaymentRails recovery. It does not revoke Permit2 approvals, invalidate
+///      new `execute` calls, ERC-1271 validation and `syncAllowance`, makes `validate` fail, and
+///      enables return-to-PaymentRails recovery. It does not revoke Permit2 approvals, invalidate
 ///      digests permanently, block inbound refunds or direct transfers, prove refund
 ///      attribution, or undo already consumed Permit2 nonces.
 contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EIP712 {

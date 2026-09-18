@@ -53,8 +53,11 @@ contract AtumModuleFactory is IAtumModuleFactory {
         if (_permit2 == address(0)) {
             revert Errors.AtumModuleFactory_ZeroPermit2();
         }
-        // The module constructor calls DOMAIN_SEPARATOR() on this address; rejecting EOAs here fails
-        // fast at factory deployment instead of on every create().
+        // The module constructor rejects a codeless Permit2 itself; checking here fails fast at
+        // factory deployment instead of on every create(). This used to be justified by the
+        // module calling DOMAIN_SEPARATOR() on the address, which reverted against an EOA as a
+        // side effect -- that call was dead state and has been removed, so both checks are now
+        // explicit.
         if (_permit2.code.length == 0) {
             revert Errors.AtumModuleFactory_Permit2NotContract(_permit2);
         }
@@ -157,7 +160,6 @@ contract AtumModuleFactory is IAtumModuleFactory {
                             PRIVATE FUNCTIONS
     //////////////////////////////////////////////////////////////////////////*/
 
-    /// @dev Validates the per-instance deployment parameters shared by both create functions.
     /// @dev Certora L-01: only the PaymentRails owner may create a module bound to it.
     ///
     ///      Creation was permissionless, so anyone could deploy a genuine factory module naming a
@@ -192,6 +194,7 @@ contract AtumModuleFactory is IAtumModuleFactory {
         return keccak256(abi.encodePacked(deployer, salt));
     }
 
+    /// @dev Validates the per-instance deployment parameters shared by both create functions.
     function _checkCreateParams(address owner, address paymentRails, address keeper) private pure {
         // Zero owner would brick the module: no one could rotate the keeper or pause.
         if (owner == address(0)) {
