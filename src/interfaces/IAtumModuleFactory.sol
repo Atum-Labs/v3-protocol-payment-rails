@@ -74,7 +74,10 @@ interface IAtumModuleFactory {
     /// @param keeper The keeper that would be passed to {createDeterministic}.
     /// @param salt The salt that would be passed to {createDeterministic}.
     /// @return predicted The address where the AtumModule would be deployed.
+    /// @param deployer Address that will call `createDeterministic`. The salt is bound to it
+    ///        (Certora I-04), so the predicted address differs per deployer.
     function predictDeterministicAddress(
+        address deployer,
         address owner,
         address paymentRails,
         address keeper,
