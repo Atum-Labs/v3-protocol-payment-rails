@@ -43,8 +43,15 @@ import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 ///      Because that sweep pays out the whole balance, `execute` will NOT stage a second
 ///      destination on top of a non-empty balance: it records the route the current balance was
 ///      pulled for in `stagedRoute` and returns a failed result if PaymentRails is reconfigured
-///      to a different one while funds are still held (Certora L-04). Drain or sweep first, then
-///      reconfigure.
+///      to a different one while funds are still held (Certora L-04). `validate` applies the same
+///      guard, so a preview cannot report success for a call `execute` would refuse. Drain or
+///      sweep first, then reconfigure.
+///
+///      That guard treats a zero balance as settlement, which a refund can falsify. It is scoped
+///      to funds the module is CURRENTLY holding and makes no claim about funds that left and came
+///      back: a refund arriving after the next route is staged is swept under that new route, and
+///      the guard then also refuses the corrective change back. See {IAtumModule.stagedRoute} for
+///      the full statement. Which destination a payment reaches is a keeper property throughout.
 ///
 ///      Keeper operating flow:
 ///      - Watch {AtumIntentCreated}; when emitted, read/use `availableSourceAmount` and
@@ -214,14 +221,12 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
         //
         // Keyed on the decoded destination triple rather than the raw `params` bytes, so the guard
         // tracks the ROUTE and not its encoding.
-        bytes32 routeHash = keccak256(abi.encode(paymentParams));
-        bytes32 staged = stagedRoute[token];
-        if (staged != bytes32(0) && staged != routeHash && IERC20(token).balanceOf(address(this)) > 0) {
+        if (_routeChangedWhileStaged(token, paymentParams)) {
             return _failedResult(token, "Route changed while funds are staged");
         }
 
         _pullExactToken(token, amount);
-        stagedRoute[token] = routeHash;
+        stagedRoute[token] = keccak256(abi.encode(paymentParams));
 
         // ONE quantity drives the allowance, the emitted intent and `pendingAmount`: the balance
         // the module actually holds right now (Certora L-03 + I-05).
@@ -383,12 +388,16 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
             return (false, "Module paused");
         }
 
-        (isValid, reason,) = _validatePaymentParams(token, amount, params);
+        DataTypes.AtumPaymentParams memory paymentParams;
+        (isValid, reason, paymentParams) = _validatePaymentParams(token, amount, params);
         if (!isValid) {
             return (false, reason);
         }
         if (!_hasSufficientBalance(token, amount)) {
             return (false, "Insufficient balance");
+        }
+        if (_routeChangedWhileStaged(token, paymentParams)) {
+            return (false, "Route changed while funds are staged");
         }
         return (true, "");
     }
@@ -493,6 +502,22 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
             return (false, "Destination asset chain mismatch", paymentParams);
         }
         return (true, "", paymentParams);
+    }
+
+    /// @dev The L-04 guard, shared by `execute` and `validate` so a preview cannot report success
+    ///      for a call the same block would reject. Both callers read this BEFORE any pull, so the
+    ///      two see identical state and the mirror is exact rather than approximate.
+    function _routeChangedWhileStaged(
+        address token,
+        DataTypes.AtumPaymentParams memory paymentParams
+    )
+        private
+        view
+        returns (bool)
+    {
+        bytes32 staged = stagedRoute[token];
+        if (staged == bytes32(0)) return false;
+        return staged != keccak256(abi.encode(paymentParams)) && IERC20(token).balanceOf(address(this)) > 0;
     }
 
     function _pullExactToken(address token, uint256 amount) private {

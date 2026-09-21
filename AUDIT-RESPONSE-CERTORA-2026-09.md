@@ -6,7 +6,9 @@
 
 **Status** All 11 addressed. No finding deferred, and none answered with an acknowledgement alone.
 
-Each fix is accompanied by a regression test. `forge test`: **656 pass, 0 fail, 57 skipped** across 104 suites. `solhint`: 0 errors.
+Three further observations raised during the fix review are answered under [Fix-review follow-on](#fix-review-follow-on-three-observations-on-the-mitigations): one fixed, two acknowledged with the reasoning recorded.
+
+Each fix is accompanied by a regression test. `forge test`: **662 pass, 0 fail, 57 skipped** across 104 suites. `solhint`: 0 errors.
 
 ---
 
@@ -92,9 +94,11 @@ The allowance was refreshable only through `execute`, which requires a positive 
 
 The report recommends emitting the newly-pulled amount rather than the total balance. That conflicts with the module's documented sweep behaviour — quoted in the report under L-02 — whereby refunds and failed deposits are intended to be collected by a later request. Both properties cannot hold simultaneously.
 
-**Fix.** The sweep is retained and the collision is instead made impossible. `stagedRoute[token]` records the destination the current balance was pulled for, and `execute` refuses a different route while the balance is non-zero; the balance must be drained or swept before reconfiguration. The guard is keyed on the decoded destination fields rather than the raw `params` bytes, so it tracks the route rather than its encoding, and it is scoped to staged funds rather than to route changes in general, making it an ordering constraint rather than a lock. `returnTokenBalance` clears the record so it cannot outlive the funds it describes.
+**Fix.** The sweep is retained and the collision is instead made impossible. `stagedRoute[token]` records the destination the current balance was pulled for, and `execute` refuses a different route while the balance is non-zero; the balance must be drained or swept before reconfiguration. The guard is keyed on the decoded destination fields rather than the raw `params` bytes, so it tracks the route rather than its encoding, and it is scoped to staged funds rather than to route changes in general, making it an ordering constraint rather than a lock. `returnTokenBalance` clears the record so it cannot outlive the funds it describes. `validate` applies the same guard, so a preview cannot report success for a call `execute` would refuse — see the fix-review follow-on below.
 
 The original recommendation remains available as an alternative, at the cost of the refund collection described above. We would suggest that trade be made explicitly rather than by default.
+
+**The guard's scope, stated narrowly.** It closes exactly one thing: a PaymentRails reconfiguration silently redirecting a balance the module is holding and has not yet released. It is not settlement attribution and does not make the module request-scoped. It treats a zero balance as settlement, which a refund can falsify. The residual cases are enumerated under the follow-on below and documented on `IAtumModule.stagedRoute`.
 
 ---
 
@@ -127,6 +131,54 @@ The existing `FeeOnTransferERC20` fixture does not exercise this case, as it red
 **I-02.** `renounceOwnership` reverts. Every recovery path is `onlyOwner`, and the sweep is `onlyOwner whenPaused`, so renouncing while paused and holding tokens would strand the funds permanently.
 
 **I-03.** The constructor emits `KeeperSet(address(0), keeper)`, and the factory's `AtumModuleCreated` now carries the keeper. The initial keeper authorises movement of every token the module holds and was not previously logged by either, so event history alone could not establish which key was able to sign at a given time. The keeper is not indexed on `AtumModuleCreated`, which already carries the maximum three indexed topics; it is filterable through `KeeperSet`. This changes the event signature to `AtumModuleCreated(address,address,address,address)`, so any consumer decoding it must be updated.
+
+---
+
+## Fix-review follow-on (three observations on the mitigations)
+
+Raised against the fixes above rather than against the original code. Each was reproduced before being answered.
+
+### 1. `validate` and `estimateOutput` did not apply the L-04 route guard — fixed
+
+Confirmed. With Route A funds staged and PaymentRails reconfigured to Route B, `validate` returned `(true, "")` while `execute` in the same state returned `"Route changed while funds are staged"`.
+
+**Severity is bounded by where `validate` sits.** It is not on the settlement path. `PaymentRails.executeAction` calls `execute` directly and never consults `validate`; the only production caller is `previewExecution`, a `view`. `IActionModule` states this explicitly. So `validate` returning `true` authorises nothing, and the failure is soft — `execute` returns a failed result, PaymentRails emits `ActionFailed`, revokes the approval and returns `false`, with nothing pulled and no state changed. The cost is a wasted transaction.
+
+**Fix.** `execute` and `validate` share `_routeChangedWhileStaged(token, paymentParams)`. Both evaluate it before any pull, so they read identical `stagedRoute` and `balanceOf` values and cannot disagree within a block — the mirror is exact rather than approximate.
+
+> **Consequence.** `previewExecution` does `revert(reason)` on a failed `validate`, so the preview now reverts with `"Route changed while funds are staged"` where it previously returned `(0, token)`.
+
+**`estimateOutput` is deliberately not changed.** It is a constant function: every path returns `(0, token)`, including paused and invalid params. The module produces no on-chain output token, since settlement occurs off-chain through Escrow, so there is no estimate for a route change to alter and the guard would change no return value. That `estimateOutput` cannot distinguish success from failure is a real observation, but it is an `IActionModule` interface property rather than anything specific to this guard.
+
+For completeness, `validate` remains a deliberately imperfect model of `execute`: `previewExecution` passes the rails' full balance while `executeAction` takes a caller-supplied `amount`, and `_hasSufficientBalance` reads `balanceOf(msg.sender)`, so `validate` is only meaningful when PaymentRails is the caller. The route guard is the one divergence that is cheap and exact to close.
+
+**Coverage.** Reverting fails `test_Validate_WhenRouteChangedWhileFundsAreStaged_ReturnsRouteChanged` with the defect's own signature (`true != false`) and `test_PreviewExecution_WhenRouteChangedWhileFundsAreStaged_Reverts`. Two negative controls pin that the mirror does not over-fire.
+
+### 2. Route changes, refunds and recovery — acknowledged, documented, not fixed
+
+Confirmed, including all three paths described. The mechanism is that **`stagedRoute[token]` is cleared only by `returnTokenBalance`, never by settlement**, because the module receives no notification of a Permit2 pull. After Escrow drains the balance the record still names the old route while the balance is zero, so the guard's `balanceOf > 0` term lets the next route stage over it. A later refund then merges into one fungible balance and is swept under the new route — via `syncAllowance`, via a further `execute`, or after a sweep and unpause.
+
+**A fourth case, which the fix introduced and which we would rather record than omit: the guard also refuses the corrective change.** Once a refund for the old route sits under the new route's record, pointing PaymentRails back at the old route fails the guard as well, because the balance is non-zero and the routes differ. The on-chain exit is pause + `returnTokenBalance`, which returns funds to PaymentRails rather than paying them to the intended beneficiary.
+
+This follows from the module being balance-scoped rather than request-scoped, which is explicit in its documentation: no request ids, no per-payment reservation, no recovery metadata. Destination selection has never been a module invariant. `AtumIntentCreated` is a signal, the keeper constructs the Permit2 request off-chain, and `syncAllowance` deliberately does not stage a route. Attributing a refund to the request that produced it is keeper work, and the keeper holds the request ids and Escrow events required.
+
+**Blast radius is single-tenant.** One module is bound to one immutable PaymentRails, there is one config per (rails, token), and route changes are `onlyOwner` on PaymentRails. Both routes are therefore destinations chosen by the same operator — misallocation within one operator's control, not cross-user theft. `executeAction` is permissionless to call, but the caller cannot choose a destination.
+
+Documented on `IAtumModule.stagedRoute` and the module header, and pinned by `test_ExecuteAction_RefundOfAnOldRouteIsSweptUnderTheNewOne` and `test_ExecuteAction_GuardAlsoRefusesTheCorrectiveRouteChange`.
+
+> **Open with the auditor.** Whether an `onlyOwner clearStagedRoute(address token)` emitting an event would be accepted, so that a deliberate redirect is explicit and logged rather than requiring a pause and a full sweep. L-04's requirement is that a route change must not *silently* redirect staged funds; an authorised, logged override appears consistent with that.
+
+### 3. `_checkPaymentRailsOwner` does not verify that `paymentRails` is a PaymentRails — acknowledged
+
+The conclusion is correct. One correction to the mechanism, because it affects reproducibility.
+
+**A contract whose `owner()` returns `msg.sender` does not satisfy the check.** `Ownable(paymentRails).owner()` is called by the *factory*, so `msg.sender` inside the callee is the factory address; the comparison then evaluates caller-versus-factory and reverts with `AtumModuleFactory_NotPaymentRailsOwner`. The shape that works is a contract returning a hardcoded caller-controlled address. Verified in both directions.
+
+The check is an authorisation check over registry writes, not a type assertion, and was scoped to L-01 only. Its impact is bounded by the same quirk: because `owner()` must return `msg.sender`, a caller can only register against a contract that names them, and cannot write into another party's listing. What remains is entries under addresses they already control — registry noise, on top of the unbounded `_deployedModules` growth already documented.
+
+**No type probe will be added.** The factory is not a trust root: `new AtumModule(permit2, anyRails, attacker, attacker)` bypasses it entirely, so no check here can establish a property about modules in general. And every available probe — ERC-165, calling `getTokenConfig`, any marker function — is a shape check, equally forgeable by the contract being probed. Adding one would turn an informational registry into one that looks authoritative and is not. `PaymentRails.configureToken` already probes `IActionModule.moduleType()` in a `try`/`catch` and is likewise a sanity check rather than proof.
+
+The factory NatSpec now states that the owner check gates who may write and asserts nothing about what `paymentRails` is.
 
 ---
 

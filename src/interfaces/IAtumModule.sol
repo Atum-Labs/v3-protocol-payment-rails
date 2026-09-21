@@ -84,7 +84,32 @@ interface IAtumModule is IActionModule, IERC1271 {
     /// @dev Certora L-04. `execute` refuses a different route while the token balance is
     ///      non-zero, because the module holds one fungible balance per token and the keeper
     ///      sweeps all of it -- so funds staged for one destination would otherwise be payable to
-    ///      the next one configured. Cleared by `returnTokenBalance`.
+    ///      the next one configured. `validate` applies the same guard, so a preview cannot
+    ///      report success for a call `execute` would refuse. Cleared by `returnTokenBalance`.
+    ///
+    ///      SCOPE, STATED NARROWLY BECAUSE THE OVER-READING IS DANGEROUS. This closes exactly one
+    ///      thing: a PaymentRails reconfiguration silently redirecting a balance the module is
+    ///      holding and has not yet released. It is NOT settlement attribution, and it does not
+    ///      make the module request-scoped. Specifically:
+    ///
+    ///      * It is cleared only by `returnTokenBalance`, never by settlement -- the module gets
+    ///        no notification of a Permit2 pull. After Escrow drains the balance the record still
+    ///        names the old route while the balance is zero, so the `balanceOf > 0` term lets the
+    ///        next route stage over it.
+    ///      * An Escrow refund arriving after that point merges into one fungible balance and is
+    ///        swept under the NEW route, whether by `syncAllowance`, by a further `execute`, or
+    ///        after a `returnTokenBalance` sweep and unpause. The module cannot tell refunded
+    ///        funds apart from fresh ones.
+    ///      * The guard is symmetric, so it also refuses the CORRECTIVE change: once a refund for
+    ///        the old route sits under the new route's record, pointing PaymentRails back at the
+    ///        old route fails too. The on-chain exit is pause + `returnTokenBalance`, which
+    ///        returns funds to PaymentRails rather than paying them out.
+    ///
+    ///      Destination selection is a keeper property, not a module invariant. The module never
+    ///      enforced where funds go: {AtumIntentCreated} is a signal, the keeper builds the
+    ///      Permit2 request off-chain, and {syncAllowance} deliberately does not stage a route.
+    ///      Attributing a refund to the request that produced it is keeper work, and the keeper
+    ///      has the request ids and Escrow events needed to do it.
     function stagedRoute(address token) external view returns (bytes32);
 
     /// @notice Re-points the Permit2 allowance at the module's current balance.

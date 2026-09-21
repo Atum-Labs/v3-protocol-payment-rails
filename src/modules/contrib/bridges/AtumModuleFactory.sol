@@ -171,6 +171,27 @@ contract AtumModuleFactory is IAtumModuleFactory {
     ///      OPERATIONAL CONSEQUENCE, flagged deliberately: if Atum deploys modules on a customer's
     ///      behalf, that flow now requires the customer's PaymentRails owner to be the caller, or
     ///      an explicit deployer allowlist instead of this check. Raised with the module owner.
+    ///
+    ///      THIS IS AN AUTHORISATION CHECK, NOT A TYPE CHECK. It asserts who may write to the
+    ///      registry. It asserts nothing about what `paymentRails` is: any contract returning the
+    ///      caller's address from `owner()` satisfies it, PaymentRails or not. That is by design,
+    ///      and adding a type probe would make it worse rather than better:
+    ///
+    ///      * The check bounds the damage by itself. `owner()` must return `msg.sender`, so a
+    ///        caller can only register against a contract that names them -- they cannot write
+    ///        into another party's listing, which is the whole of what L-01 closed. What remains
+    ///        is entries under addresses they already control: registry noise, on top of the
+    ///        unbounded `_deployedModules` growth documented above.
+    ///      * The factory is not a trust root in any case. `new AtumModule(permit2, anyRails,
+    ///        attacker, attacker)` bypasses it entirely, so no check here can establish a property
+    ///        about modules in general.
+    ///      * Every probe available to us -- ERC-165, calling `getTokenConfig`, any marker
+    ///        function -- is a shape check and is equally forgeable by the contract being probed.
+    ///        Adding one would turn an informational registry into one that LOOKS authoritative
+    ///        and is not. Compare `PaymentRails.configureToken`, which probes
+    ///        `IActionModule.moduleType()` in a try/catch: also a sanity check, also not proof.
+    ///
+    ///      Consumers must verify a module's `owner`/`keeper`/`paymentRails` wiring directly.
     function _checkPaymentRailsOwner(address paymentRails) private view {
         if (paymentRails.code.length == 0) {
             revert Errors.AtumModuleFactory_PaymentRailsNotContract(paymentRails);
