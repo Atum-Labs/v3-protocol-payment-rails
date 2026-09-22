@@ -284,6 +284,114 @@ contract AtumModuleIntegrationTest is Test {
         assertEq(module.stagedRoute(address(sourceToken)), bytes32(0), "cleared with the funds");
     }
 
+    /// L-04 follow-on (Certora fix review). `validate` did not know about the route guard, so a
+    /// preview reported success for a call `execute` would refuse in the same block.
+    ///
+    /// The divergence was never exploitable -- `executeAction` calls `execute` directly and never
+    /// consults `validate` (see {IActionModule}) -- so the cost was a wasted transaction rather
+    /// than a bypassed check. It is mirrored anyway because both sides read the guard BEFORE any
+    /// pull, which makes the mirror exact rather than approximate.
+    function test_Validate_WhenRouteChangedWhileFundsAreStaged_ReturnsRouteChanged() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT), "route A staged");
+
+        DataTypes.AtumPaymentParams memory routeB = _configureRouteB();
+
+        _assertValidate(
+            address(sourceToken),
+            PAYMENT_AMOUNT,
+            module.encodeParams(routeB),
+            false,
+            "Route changed while funds are staged"
+        );
+    }
+
+    /// And the reason reaches the caller: PaymentRails turns a failed `validate` into
+    /// `revert(reason)`, so the preview now names the same condition `execute` would report.
+    function test_PreviewExecution_WhenRouteChangedWhileFundsAreStaged_Reverts() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+
+        _configureRouteB();
+
+        vm.expectRevert(bytes("Route changed while funds are staged"));
+        nodeContract.previewExecution(address(sourceToken));
+    }
+
+    /// The mirror must not over-fire: the same route over a staged balance still validates.
+    function test_Validate_WhenRouteIsUnchanged_StillPasses() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+
+        _assertValidate(address(sourceToken), PAYMENT_AMOUNT, _defaultEncodedParams(), true, "");
+    }
+
+    /// ...and it tracks `execute`'s scoping rather than route changes as such: once the balance is
+    /// drained the new route validates, exactly as `execute` would accept it.
+    function test_Validate_WhenBalanceIsDrained_AllowsTheNewRoute() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+        permit2.pull(address(sourceToken), address(module), escrow, PAYMENT_AMOUNT);
+
+        DataTypes.AtumPaymentParams memory routeB = _configureRouteB();
+
+        _assertValidate(address(sourceToken), PAYMENT_AMOUNT, module.encodeParams(routeB), true, "");
+    }
+
+    /// L-04 follow-on, acknowledged and NOT fixed: the guard treats a zero balance as settlement,
+    /// but Escrow may refund afterwards. `stagedRoute` is cleared only by `returnTokenBalance`,
+    /// never by settlement -- the module gets no notification of a Permit2 pull -- so once Route B
+    /// is staged over the drained balance, a late Route A refund merges into one fungible balance
+    /// and is swept under Route B.
+    ///
+    /// This is the documented consequence of a balance-scoped module: destination selection is a
+    /// keeper property, not a module invariant. Pinned here so the behaviour is deliberate.
+    function test_ExecuteAction_RefundOfAnOldRouteIsSweptUnderTheNewOne() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+        permit2.pull(address(sourceToken), address(module), escrow, PAYMENT_AMOUNT);
+        assertEq(module.stagedRoute(address(sourceToken)), _routeHash(_defaultParams()), "route A record survives");
+
+        DataTypes.AtumPaymentParams memory routeB = _configureRouteB();
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT), "guard passes over a zero balance");
+        assertEq(module.stagedRoute(address(sourceToken)), _routeHash(routeB), "route B staged");
+
+        // The Route A payment is refunded after Route B was staged.
+        vm.prank(escrow);
+        sourceToken.transfer(address(module), PAYMENT_AMOUNT);
+
+        vm.prank(keeper);
+        assertEq(module.syncAllowance(address(sourceToken)), PAYMENT_AMOUNT * 2, "refund armed under route B");
+    }
+
+    /// The same gap in the other direction, which the guard makes worse rather than better: with a
+    /// Route A refund sitting under a Route B record, pointing PaymentRails back at Route A to pay
+    /// its intended beneficiary is REFUSED. The only on-chain exit is pause + sweep, which returns
+    /// the funds to PaymentRails instead of paying them out.
+    function test_ExecuteAction_GuardAlsoRefusesTheCorrectiveRouteChange() external {
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+        permit2.pull(address(sourceToken), address(module), escrow, PAYMENT_AMOUNT);
+
+        _configureRouteB();
+        vm.prank(executor);
+        assertTrue(nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT));
+
+        vm.prank(escrow);
+        sourceToken.transfer(address(module), PAYMENT_AMOUNT);
+
+        // Operator tries to route the refund back to where it was meant to go.
+        bytes memory encodedA = _defaultEncodedParams();
+        vm.prank(nodeOwner);
+        nodeContract.configureToken(address(sourceToken), "ATUM_PAYMENT", address(module), MIN_BALANCE, encodedA, true);
+
+        vm.prank(executor);
+        assertFalse(
+            nodeContract.executeAction(address(sourceToken), PAYMENT_AMOUNT), "the guard refuses the correction"
+        );
+    }
+
     /// L-02. A refund that arrives while PaymentRails is empty used to be unreachable: the
     /// allowance was only refreshed by `execute`, and `execute` needs a positive pull.
     function test_SyncAllowance_RecoversRefundWhenPaymentRailsIsEmpty() external {
