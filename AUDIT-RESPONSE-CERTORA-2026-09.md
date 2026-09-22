@@ -166,7 +166,7 @@ This follows from the module being balance-scoped rather than request-scoped, wh
 
 Documented on `IAtumModule.stagedRoute` and the module header, and pinned by `test_ExecuteAction_RefundOfAnOldRouteIsSweptUnderTheNewOne` and `test_ExecuteAction_GuardAlsoRefusesTheCorrectiveRouteChange`.
 
-> **Open with the auditor.** Whether an `onlyOwner clearStagedRoute(address token)` emitting an event would be accepted, so that a deliberate redirect is explicit and logged rather than requiring a pause and a full sweep. L-04's requirement is that a route change must not *silently* redirect staged funds; an authorised, logged override appears consistent with that.
+> **Raised with the auditor and closed.** We asked whether an `onlyOwner clearStagedRoute(address token)` emitting an event would be accepted, so that a deliberate redirect is explicit and logged rather than requiring a pause and a full sweep. Declined, and we agree with the reasoning: because refunds can land unexpectedly and be picked up by `syncAllowance`, clearing the record would not address the underlying behaviour. The finding is recorded as acknowledged, scoped as *"prevents a config change redirecting a currently-held balance."* No function was added.
 
 ### 3. `_checkPaymentRailsOwner` does not verify that `paymentRails` is a PaymentRails — acknowledged
 
