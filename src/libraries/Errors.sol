@@ -150,6 +150,11 @@ library Errors {
     /// @param keeper Current keeper authorized to call.
     error AtumModule_NotKeeper(address caller, address keeper);
 
+    /// @notice Thrown when authorizing the zero address as an ERC-1271 caller.
+    /// @dev Certora M-01. `address(0)` is what an `eth_call` with no `from` presents as, so
+    ///      authorizing it would hand the magic value to every off-chain probe.
+    error AtumModule_ZeroSignatureCaller();
+
     /// @notice Thrown when a token address is zero.
     error AtumModule_ZeroToken();
 
