@@ -20,7 +20,7 @@ Each fix is accompanied by a regression test. `forge test`: **664 pass, 0 fail, 
 | L-01 | Low      | Fixed — creation restricted to the PaymentRails owner        |
 | L-02 | Low      | Fixed — `syncAllowance`, keeper-gated                        |
 | L-03 | Low      | Fixed — addressed together with I-05                         |
-| L-04 | Low      | Fixed — by a different mechanism than recommended; see below |
+| L-04 | Low      | Acknowledged — a config change cannot redirect a currently-held balance; a later refund can be paid to the new route, and that is accepted |
 | I-01 | Info     | Resolved by giving the unused modifier a caller              |
 | I-02 | Info     | Fixed — `renounceOwnership` reverts                          |
 | I-03 | Info     | Fixed — initial keeper emitted by the module and the factory |
@@ -113,11 +113,11 @@ The allowance was refreshable only through `execute`, which requires a positive 
 
 The report recommends emitting the newly-pulled amount rather than the total balance. That conflicts with the module's documented sweep behaviour — quoted in the report under L-02 — whereby refunds and failed deposits are intended to be collected by a later request. Both properties cannot hold simultaneously.
 
-**Fix.** The sweep is retained and the collision is instead made impossible. `stagedRoute[token]` records the destination the current balance was pulled for, and `execute` refuses a different route while the balance is non-zero; the balance must be drained or swept before reconfiguration. The guard is keyed on the decoded destination fields rather than the raw `params` bytes, so it tracks the route rather than its encoding, and it is scoped to staged funds rather than to route changes in general, making it an ordering constraint rather than a lock. `returnTokenBalance` clears the record so it cannot outlive the funds it describes. `validate` applies the same guard, so a preview cannot report success for a call `execute` would refuse — see the fix-review follow-on below.
+**Fix.** The sweep is retained. A reconfiguration cannot redirect a balance the module currently holds: `stagedRoute[token]` records the destination that balance was pulled for, and `execute` refuses a different route while the balance is non-zero; the balance must be drained or swept before reconfiguration. The guard is keyed on the decoded destination fields rather than the raw `params` bytes, so it tracks the route rather than its encoding, and it is scoped to staged funds rather than to route changes in general, making it an ordering constraint rather than a lock. `returnTokenBalance` clears the record so it cannot outlive the funds it describes. `validate` applies the same guard, so a preview cannot report success for a call `execute` would refuse — see the fix-review follow-on below.
 
 The original recommendation remains available as an alternative, at the cost of the refund collection described above. We would suggest that trade be made explicitly rather than by default.
 
-**The guard's scope, stated narrowly.** It closes exactly one thing: a PaymentRails reconfiguration silently redirecting a balance the module is holding and has not yet released. It is not settlement attribution and does not make the module request-scoped. It treats a zero balance as settlement, which a refund can falsify. The residual cases are enumerated under the follow-on below and documented on `IAtumModule.stagedRoute`.
+**Acknowledged, both halves.** A config change cannot redirect a balance this module currently holds. A later refund can be paid to the new route, and that is accepted. It is not settlement attribution and does not make the module request-scoped. It treats a zero balance as settlement, which a refund can falsify. That refund path, and the corrective-change case it produces, are enumerated under the follow-on below and documented on `IAtumModule.stagedRoute`.
 
 ---
 
@@ -185,7 +185,7 @@ This follows from the module being balance-scoped rather than request-scoped, wh
 
 Documented on `IAtumModule.stagedRoute` and the module header, and pinned by `test_ExecuteAction_RefundOfAnOldRouteIsSweptUnderTheNewOne` and `test_ExecuteAction_GuardAlsoRefusesTheCorrectiveRouteChange`.
 
-> **Raised with the auditor and closed.** We asked whether an `onlyOwner clearStagedRoute(address token)` emitting an event would be accepted, so that a deliberate redirect is explicit and logged rather than requiring a pause and a full sweep. Declined, and we agree with the reasoning: because refunds can land unexpectedly and be picked up by `syncAllowance`, clearing the record would not address the underlying behaviour. The finding is recorded as acknowledged, scoped as *"prevents a config change redirecting a currently-held balance."* No function was added.
+> **Raised with the auditor and closed.** We asked whether an `onlyOwner clearStagedRoute(address token)` emitting an event would be accepted, so that a deliberate redirect is explicit and logged rather than requiring a pause and a full sweep. Declined, and we agree with the reasoning: because refunds can land unexpectedly and be picked up by `syncAllowance`, clearing the record would not address the underlying behaviour. The finding is recorded as acknowledged with both halves: a config change cannot redirect a balance this module currently holds; a later refund can be paid to the new route, and that is accepted. No function was added.
 
 ### 3. `_checkPaymentRailsOwner` does not verify that `paymentRails` is a PaymentRails — acknowledged
 
