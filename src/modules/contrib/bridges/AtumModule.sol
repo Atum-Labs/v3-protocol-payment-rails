@@ -330,47 +330,19 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
     //////////////////////////////////////////////////////////////////////////*/
 
     /// @notice Validates that `signature` was signed by the module keeper for `hash`.
-    /// @dev Answers exactly one question -- did the authorized keeper sign this hash -- for
-    ///      exactly one set of callers. See the note in the body on what an application
-    ///      validating signatures against this module has to do for that to be safe.
+    /// @dev Keeper authorship only, for authorized callers only. See the body note for what an
+    ///      integrating application must do for that to be safe (Certora M-01).
     function isValidSignature(bytes32 hash, bytes memory signature) external view override returns (bytes4) {
-        // Certora M-01: the replay risk this function CANNOT close, and what an integrating
-        // application owes it.
+        // Certora M-01. This checks only that the keeper signed `hash`. ERC-1271 gives no
+        // preimage, so it cannot tell whether `hash` was meant for THIS module -- modules
+        // sharing a keeper all validate the same (hash, signature) pair.
         //
-        // This module answers "did my keeper sign this hash". It does not answer "was this hash
-        // meant for ME", and it cannot: ERC-1271 passes a 32-byte keccak output with no
-        // preimage, so the domain the hash was built under, the spender it names, the amount it
-        // moves and any witness it carries are all unreadable here. Re-deriving them would mean
-        // asking the caller for the preimage -- and in a replay the caller is the attacker.
-        //
-        // That gap IS the finding. Modules may share a keeper, so one (hash, signature) pair
-        // validates at every module that shares it. An application acting on the magic value
-        // without independently tying the hash to THIS module will move funds out of each of
-        // them off a single authorisation, because nothing it did was module-specific.
-        //
-        // SO AN APPLICATION VALIDATING SIGNATURES AGAINST THIS MODULE MUST make the module's
-        // address a necessary input to something it verifies itself. Either shape suffices:
-        //
-        //   (a) Put the owner's address in the signed payload, so the digest differs per
-        //       module. It must take that address from the account it is ACTUALLY DEBITING and
-        //       not from a caller-supplied field, or an attacker debits module B while
-        //       presenting module A's payload and the digest never changes.
-        //
-        //   (b) Gate execution on a second, independently signed artifact that commits to the
-        //       owner's address, verified BEFORE the ERC-1271 result is acted on.
-        //
-        // An application doing neither is unsafe with this module whatever it signs, and
-        // `isAuthorizedSignatureCaller` is the only thing keeping one out -- which is why
-        // `setSignatureCaller` is an owner decision and not a permissionless one.
-        //
-        // WORKED EXAMPLE, and note that Permit2 ALONE DOES NOT QUALIFY. Permit2's digest omits
-        // the owner and its nonces are tracked per owner, so replaying one authorisation across
-        // owners costs nothing -- that is precisely the reported exploit. Atum Escrow supplies
-        // the missing binding by shape (b): `depositId` is
-        // keccak256(depositor, depositSignature, permit.nonce) and must equal the `depositId`
-        // inside a ReserveWitness the reserver signed, checked before Permit2 is called.
-        // Offering the same deposit signature for another module changes `depositor`, so it
-        // changes `depositId`, so it needs a fresh reserver signature naming that module.
+        // An application validating signatures here must bind the module address itself: in the
+        // signed payload, taken from the account it debits and not a caller-supplied field, or
+        // in a separately signed artifact checked before this result is used. Permit2 does
+        // neither -- its digest omits the owner and its nonces are per owner, which is the
+        // reported exploit. Escrow supplies the binding: `depositId`, keccak256(depositor,
+        // depositSignature, nonce), must match a reserver-signed ReserveWitness checked first.
         if (paused() || !isAuthorizedSignatureCaller[msg.sender] || _invalidatedPermitDigests[hash]) {
             return EIP1271_FAILURE_VALUE;
         }
