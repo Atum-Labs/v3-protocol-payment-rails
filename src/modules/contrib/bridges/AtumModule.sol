@@ -94,9 +94,6 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
     address public override keeper;
 
     /// @dev Permit2 digests that must no longer satisfy ERC-1271 checks.
-    /// @inheritdoc IAtumModule
-    bytes32 public constant override KEEPER_APPROVAL_TYPEHASH = keccak256("AtumKeeperApproval(bytes32 permit2Digest)");
-
     mapping(bytes32 digest => bool invalidated) private _invalidatedPermitDigests;
 
     /// @inheritdoc IAtumModule
@@ -334,24 +331,20 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
 
     /// @notice Validates that `signature` was signed by the module keeper for `hash`.
     function isValidSignature(bytes32 hash, bytes memory signature) external view override returns (bytes4) {
-        // INVALIDATION IS KEYED ON THE RAW `hash`, NOT THE WRAPPED ONE. This is the part of the
-        // M-01 fix that can silently break the kill-switch: `invalidateDigest` is called by the
-        // keeper with the Permit2 digest it produced, which is exactly the value arriving here as
-        // `hash`. Re-keying this lookup to the wrapped digest would leave every previously
-        // invalidated digest looking un-invalidated, and this function would keep returning the
-        // magic value for a digest an operator believes they revoked -- a failure that is invisible
-        // until it is exploited. The pairing is pinned by test_InvalidateDigest_StillBlocks...
+        // Invalidation is keyed on the RAW `hash`, not on `keeperDigest(hash)`: `invalidateDigest`
+        // is called with the Permit2 digest, which is the value arriving here. Re-keying this
+        // lookup to the module digest would leave every revoked digest looking un-invalidated
+        // while this function kept returning the magic value. Pinned by
+        // test_InvalidateDigest_StillBlocksAfterTheEIP712Wrap.
         if (paused() || _invalidatedPermitDigests[hash]) {
             return EIP1271_FAILURE_VALUE;
         }
 
-        // Certora M-01: validate a MODULE-SPECIFIC digest, not the caller's raw one.
-        //
-        // The raw hash was checked straight against the keeper, and the hash Permit2 builds does
-        // not contain the owner. Two modules sharing a keeper therefore accepted the very same
-        // (hash, signature) pair, and Permit2 tracks nonces per owner, so one authorisation drained
-        // both. Wrapping in this module's EIP-712 domain binds `address(this)` and `chainid` into
-        // what the keeper actually signs, so a signature for module A is meaningless at module B.
+        // Certora M-01: validate a MODULE-SPECIFIC digest, not the caller's raw one. Permit2's
+        // digest does not name the owner, so two modules sharing a keeper accepted the identical
+        // (hash, signature) pair, and Permit2's nonces are per owner -- one authorisation drained
+        // both. Binding `address(this)` and `chainid` into what is signed makes a signature for
+        // module A meaningless at module B.
         if (keeper.isValidSignatureNow(keeperDigest(hash), signature)) {
             return EIP1271_MAGIC_VALUE;
         }
@@ -361,7 +354,11 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
 
     /// @inheritdoc IAtumModule
     function keeperDigest(bytes32 permit2Digest) public view override returns (bytes32) {
-        return _hashTypedDataV4(keccak256(abi.encode(KEEPER_APPROVAL_TYPEHASH, permit2Digest)));
+        // The Permit2 digest is already a unique 32-byte commitment to the whole authorisation,
+        // so it is used directly as the EIP-712 message being domain-separated. Hashing it again
+        // under an `AtumKeeperApproval(bytes32)` type would bind nothing further -- the domain
+        // separator is what carries `address(this)` and `chainid`.
+        return _hashTypedDataV4(permit2Digest);
     }
 
     /*//////////////////////////////////////////////////////////////////////////

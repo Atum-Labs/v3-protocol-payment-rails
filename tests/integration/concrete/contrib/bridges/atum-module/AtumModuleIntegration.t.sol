@@ -399,6 +399,32 @@ contract AtumModuleIntegrationTest is Test {
         );
     }
 
+    /// The keeper has to reproduce `keeperDigest` off-chain, so the derivation is part of the
+    /// module's contract with it: the Permit2 digest is domain-separated as-is, with no Atum
+    /// struct type hashed in between. Rebuilt here from the ERC-5267 metadata alone, which is
+    /// everything an off-chain signer can read.
+    function test_KeeperDigest_IsThePermit2DigestUnderTheModuleDomain() external view {
+        (, string memory name, string memory version, uint256 chainId, address verifyingContract,,) =
+            module.eip712Domain();
+
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes(name)),
+                keccak256(bytes(version)),
+                chainId,
+                verifyingContract
+            )
+        );
+
+        bytes32 permit2Digest = keccak256("permit2 digest");
+        assertEq(
+            module.keeperDigest(permit2Digest),
+            keccak256(abi.encodePacked(hex"1901", domainSeparator, permit2Digest)),
+            "keeper digest must be the raw Permit2 digest under this module's EIP-712 domain"
+        );
+    }
+
     /*//////////////////////////////////////////////////////////////////////////
                                 CONSTRUCTOR
     //////////////////////////////////////////////////////////////////////////*/

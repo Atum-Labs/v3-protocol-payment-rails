@@ -62,16 +62,16 @@ interface IAtumModule is IActionModule, IERC1271 {
     ///      M-01). Also the sole caller of {syncAllowance}.
     function keeper() external view returns (address);
 
-    /// @notice EIP-712 type hash for the keeper's approval of a Permit2 digest.
-    /// @dev Certora M-01.
-    function KEEPER_APPROVAL_TYPEHASH() external view returns (bytes32);
-
     /// @notice The digest the keeper must sign for `permit2Digest` to be accepted by THIS module.
     /// @dev Certora M-01. `isValidSignature` used to validate the raw hash against the keeper, and
     ///      Permit2's digest does not contain the owner, so any two modules sharing a keeper
     ///      accepted the same (hash, signature) pair -- and Permit2's nonces are per owner, so a
-    ///      single authorisation could be replayed to drain each of them. Wrapping the digest in
-    ///      this module's EIP-712 domain binds `address(this)` and `chainid` into what is signed.
+    ///      single authorisation could be replayed to drain each of them. Applying this module's
+    ///      EIP-712 domain separator binds `address(this)` and `chainid` into what is signed.
+    ///
+    ///      `permit2Digest` is domain-separated as-is rather than being re-hashed under an Atum
+    ///      struct type: it is already a unique commitment to the authorisation, so the extra
+    ///      hash would bind nothing the domain separator does not.
     ///
     ///      OFF-CHAIN CONSEQUENCE: the keeper must sign THIS value, not the bare Permit2 digest.
     ///      A keeper that has not been updated produces signatures this module rejects, which
