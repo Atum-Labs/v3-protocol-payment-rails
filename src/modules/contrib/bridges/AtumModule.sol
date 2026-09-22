@@ -344,10 +344,14 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
     ///      a Permit2 deposit is otherwise a bearer token at every ERC-1271 surface that treats
     ///      this module as a signer, which is the general form of Certora M-01 -- the report is
     ///      explicit that "the problem is not specific to Permit2; Permit2 is one confirmed
-    ///      exploitation path". Restricting the caller does not close the replay between two
-    ///      modules behind the same Permit2 (see the note on `setSignatureCaller`), but it does
-    ///      confine keeper signatures to applications that were deliberately trusted, which
-    ///      turns an open-ended exposure into a bounded one.
+    ///      exploitation path".
+    ///
+    ///      The cross-module replay itself is stopped a layer up, by Atum Escrow: `depositId`
+    ///      is derived from the depositor and must match a reserve witness the reserver signed,
+    ///      so the same deposit signature offered for a second module needs a fresh reserver
+    ///      signature naming it. Restricting the caller is what makes that load-bearing rather
+    ///      than incidental -- it leaves Escrow as the only application that can get here. See
+    ///      `setSignatureCaller` before authorizing anything else.
     function isValidSignature(bytes32 hash, bytes memory signature) external view override returns (bytes4) {
         if (paused() || !isAuthorizedSignatureCaller[msg.sender] || _invalidatedPermitDigests[hash]) {
             return EIP1271_FAILURE_VALUE;

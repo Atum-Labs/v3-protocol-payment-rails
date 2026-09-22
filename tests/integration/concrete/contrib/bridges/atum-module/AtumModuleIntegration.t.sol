@@ -409,20 +409,25 @@ contract AtumModuleIntegrationTest is Test {
         module.setSignatureCaller(stranger, true);
     }
 
-    /// M-01 IS NOT FIXED ON-CHAIN, and this test keeps that visible rather than letting the
-    /// caller allowlist above read as if it were.
+    /// THE MODULE DOES NOT PREVENT THE M-01 REPLAY BY ITSELF, and this test keeps that visible
+    /// rather than letting the caller allowlist above read as if it did.
     ///
     /// Permit2's digest does not name the owner, so two modules sharing a keeper validate the
-    /// identical (hash, signature) pair -- and Permit2 tracks nonces per owner, so it can be
-    /// spent once at each. The allowlist does not help: both modules authorize the SAME Permit2,
-    /// because there is only one on the chain.
+    /// identical (hash, signature) pair. The allowlist does not help here: both authorize the
+    /// SAME Permit2, because there is only one per chain. Nothing reachable from this function
+    /// could help either -- ERC-1271 supplies a 32-byte hash and no preimage, so the spender,
+    /// the amount and the witness are all uninspectable.
     ///
-    /// Nothing reachable from this function can fix it. ERC-1271 supplies a 32-byte hash and no
-    /// preimage, so the digest's contents -- the spender, the amount, the witness that could
-    /// name the module -- are not inspectable here. The controls are a keeper that is not
-    /// shared, or a digest whose contents bind the module, which is the constructing
-    /// application's to arrange.
-    function test_IsValidSignature_CrossModuleReplayIsNotPreventedOnChain() external {
+    /// What stops the replay is Atum Escrow, a layer up: `depositId` is
+    /// keccak256(depositor, depositSignature, nonce) and must equal the `depositId` inside a
+    /// reserve witness the RESERVER signed, checked before Permit2 is called. Offering the same
+    /// deposit signature for a second module changes `depositId` and so needs a fresh reserver
+    /// signature naming that module. The allowlist is what keeps Escrow the only way in.
+    ///
+    /// So this assertion is a statement about the DIVISION OF RESPONSIBILITY, not a known hole.
+    /// If it ever starts failing, an on-chain binding was added here and the audit response
+    /// needs revising.
+    function test_IsValidSignature_CrossModuleReplayIsNotPreventedByTheModuleAlone() external {
         AtumModule otherModule = new AtumModule(address(permit2), address(nodeContract), moduleOwner, keeper);
 
         bytes32 digest = keccak256("shared permit2 digest");
@@ -432,10 +437,9 @@ contract AtumModuleIntegrationTest is Test {
         assertEq(
             _isValidSignature(otherModule, digest, signature),
             EIP1271_MAGIC,
-            "RESIDUAL RISK (Certora M-01): a shared keeper still validates one authorisation at "
-            "both modules, and both authorize the same Permit2. If this assertion ever starts "
-            "failing, an on-chain binding was added and the audit response must stop describing "
-            "M-01 as an off-chain control."
+            "BY DESIGN (Certora M-01): the module validates the keeper, not the digest's "
+            "contents, so a shared keeper validates one authorisation at both. Escrow's "
+            "depositId/reserve-witness check is what prevents the replay being executed."
         );
     }
 

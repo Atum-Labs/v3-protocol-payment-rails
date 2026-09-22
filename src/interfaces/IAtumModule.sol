@@ -81,14 +81,18 @@ interface IAtumModule is IActionModule, IERC1271 {
     ///      Restricting the caller bounds a signature to applications that were deliberately
     ///      trusted.
     ///
-    ///      IT DOES NOT FIX THE REPLAY THE FINDING DESCRIBES. Two modules sharing a keeper sit
-    ///      behind the SAME Permit2, so both authorize it and both still validate the same
-    ///      `(hash, signature)` pair. Only a keeper that is not shared, or a digest whose
-    ///      contents name the module, prevents that -- and the contents are not visible here.
+    ///      IT DOES NOT PREVENT THE REPLAY BY ITSELF. Two modules sharing a keeper sit behind
+    ///      the SAME Permit2, so both authorize it and both validate the same
+    ///      `(hash, signature)` pair if asked. What prevents it is Atum Escrow: `depositId` is
+    ///      `keccak256(depositor, depositSignature, nonce)` and must equal the `depositId` in a
+    ///      reserve witness the RESERVER signed, so replaying against a second module needs a
+    ///      fresh reserver signature naming it. Escrow checks that before calling Permit2.
     ///
-    ///      Authorizing a second application means trusting it the way Permit2 is trusted: the
-    ///      keeper's signature over anything that application constructs will be honoured, and
-    ///      this module cannot inspect what that is.
+    ///      Which is exactly why this allowlist matters: it makes Escrow the only application
+    ///      that can reach this surface, so that argument covers every path rather than one.
+    ///      AUTHORIZING A SECOND APPLICATION DOES NOT INHERIT IT. Whatever is added here must
+    ///      independently bind this module's address somewhere in its own flow, the way Escrow
+    ///      does through `depositId`, or the keeper's signature becomes replayable through it.
     function setSignatureCaller(address caller, bool authorized) external;
 
     /// @notice Destination route the currently-staged balance was pulled for, as
