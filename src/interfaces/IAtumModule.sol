@@ -90,9 +90,13 @@ interface IAtumModule is IActionModule, IERC1271 {
     ///
     ///      Which is exactly why this allowlist matters: it makes Escrow the only application
     ///      that can reach this surface, so that argument covers every path rather than one.
-    ///      AUTHORIZING A SECOND APPLICATION DOES NOT INHERIT IT. Whatever is added here must
-    ///      independently bind this module's address somewhere in its own flow, the way Escrow
-    ///      does through `depositId`, or the keeper's signature becomes replayable through it.
+    ///
+    ///      Adding venues is an expected use of this function, not an exceptional one -- the
+    ///      module is meant to be pointable at wherever funds need to go. What does NOT come
+    ///      with a new venue is the replay protection above. Before authorizing one, establish
+    ///      where in ITS flow this module's address is bound, the way Escrow binds it through
+    ///      `depositId`; if nothing does, a keeper signature is replayable between every module
+    ///      sharing that keeper through that venue, and distinct keepers is all that is left.
     function setSignatureCaller(address caller, bool authorized) external;
 
     /// @notice Destination route the currently-staged balance was pulled for, as
