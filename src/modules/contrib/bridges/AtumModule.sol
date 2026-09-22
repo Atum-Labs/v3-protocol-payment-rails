@@ -330,29 +330,47 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
     //////////////////////////////////////////////////////////////////////////*/
 
     /// @notice Validates that `signature` was signed by the module keeper for `hash`.
-    /// @dev This function answers exactly one question -- did the authorized keeper sign this
-    ///      hash -- and deliberately answers no other.
-    ///
-    ///      It CANNOT answer any other. ERC-1271 hands it a 32-byte keccak output with no
-    ///      preimage, so the domain the hash was built under, the spender it names, the token
-    ///      and amount it moves and the witness it carries are all unreachable from here. Those
-    ///      belong to the application that constructed the digest -- Permit2 builds it under its
-    ///      own domain separator and Escrow fixes the witness -- and re-deriving any of them
-    ///      here would only check those contracts against themselves.
-    ///
-    ///      What this module CAN decide is WHO gets to ask. A signature the keeper produced for
-    ///      a Permit2 deposit is otherwise a bearer token at every ERC-1271 surface that treats
-    ///      this module as a signer, which is the general form of Certora M-01 -- the report is
-    ///      explicit that "the problem is not specific to Permit2; Permit2 is one confirmed
-    ///      exploitation path".
-    ///
-    ///      The cross-module replay itself is stopped a layer up, by Atum Escrow: `depositId`
-    ///      is derived from the depositor and must match a reserve witness the reserver signed,
-    ///      so the same deposit signature offered for a second module needs a fresh reserver
-    ///      signature naming it. Restricting the caller is what makes that load-bearing rather
-    ///      than incidental -- it leaves Escrow as the only application that can get here. See
-    ///      `setSignatureCaller` before authorizing anything else.
+    /// @dev Answers exactly one question -- did the authorized keeper sign this hash -- for
+    ///      exactly one set of callers. See the note in the body on what an application
+    ///      validating signatures against this module has to do for that to be safe.
     function isValidSignature(bytes32 hash, bytes memory signature) external view override returns (bytes4) {
+        // Certora M-01: the replay risk this function CANNOT close, and what an integrating
+        // application owes it.
+        //
+        // This module answers "did my keeper sign this hash". It does not answer "was this hash
+        // meant for ME", and it cannot: ERC-1271 passes a 32-byte keccak output with no
+        // preimage, so the domain the hash was built under, the spender it names, the amount it
+        // moves and any witness it carries are all unreadable here. Re-deriving them would mean
+        // asking the caller for the preimage -- and in a replay the caller is the attacker.
+        //
+        // That gap IS the finding. Modules may share a keeper, so one (hash, signature) pair
+        // validates at every module that shares it. An application acting on the magic value
+        // without independently tying the hash to THIS module will move funds out of each of
+        // them off a single authorisation, because nothing it did was module-specific.
+        //
+        // SO AN APPLICATION VALIDATING SIGNATURES AGAINST THIS MODULE MUST make the module's
+        // address a necessary input to something it verifies itself. Either shape suffices:
+        //
+        //   (a) Put the owner's address in the signed payload, so the digest differs per
+        //       module. It must take that address from the account it is ACTUALLY DEBITING and
+        //       not from a caller-supplied field, or an attacker debits module B while
+        //       presenting module A's payload and the digest never changes.
+        //
+        //   (b) Gate execution on a second, independently signed artifact that commits to the
+        //       owner's address, verified BEFORE the ERC-1271 result is acted on.
+        //
+        // An application doing neither is unsafe with this module whatever it signs, and
+        // `isAuthorizedSignatureCaller` is the only thing keeping one out -- which is why
+        // `setSignatureCaller` is an owner decision and not a permissionless one.
+        //
+        // WORKED EXAMPLE, and note that Permit2 ALONE DOES NOT QUALIFY. Permit2's digest omits
+        // the owner and its nonces are tracked per owner, so replaying one authorisation across
+        // owners costs nothing -- that is precisely the reported exploit. Atum Escrow supplies
+        // the missing binding by shape (b): `depositId` is
+        // keccak256(depositor, depositSignature, permit.nonce) and must equal the `depositId`
+        // inside a ReserveWitness the reserver signed, checked before Permit2 is called.
+        // Offering the same deposit signature for another module changes `depositor`, so it
+        // changes `depositId`, so it needs a fresh reserver signature naming that module.
         if (paused() || !isAuthorizedSignatureCaller[msg.sender] || _invalidatedPermitDigests[hash]) {
             return EIP1271_FAILURE_VALUE;
         }
