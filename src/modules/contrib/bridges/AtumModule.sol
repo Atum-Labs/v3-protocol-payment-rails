@@ -158,10 +158,12 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
 
     /// @notice Disabled: this module must always retain an owner.
     /// @dev Certora I-02. `Ownable.renounceOwnership` would set the owner to `address(0)` and
-    ///      permanently disable keeper rotation, pause/unpause and `returnTokenBalance`. The
-    ///      recovery path is `onlyOwner whenPaused`, so renouncing while paused and holding
-    ///      tokens strands them with no way out. There is no situation in which this module
-    ///      wants no owner, so the function reverts rather than being left as a footgun.
+    ///      permanently disable keeper rotation, pause/unpause, `returnTokenBalance` and
+    ///      `setSignatureCaller`. The recovery path is `onlyOwner whenPaused`, so renouncing
+    ///      while paused and holding tokens strands them with no way out, and the ERC-1271
+    ///      caller set would be frozen at whatever it happened to hold. There is no situation
+    ///      in which this module wants no owner, so the function reverts rather than being
+    ///      left as a footgun.
     function renounceOwnership() public view override onlyOwner {
         revert Errors.AtumModule_RenounceOwnershipDisabled();
     }

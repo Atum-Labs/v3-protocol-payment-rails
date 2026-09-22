@@ -125,8 +125,9 @@ library Errors {
     error AtumModule_Permit2NotContract(address permit2);
 
     /// @notice Thrown when `renounceOwnership` is called on an AtumModule.
-    /// @dev The module must always retain an owner: keeper rotation, pause/unpause and the
-    ///      `onlyOwner whenPaused` recovery sweep all depend on one existing.
+    /// @dev The module must always retain an owner: keeper rotation, pause/unpause, the
+    ///      `onlyOwner whenPaused` recovery sweep and `setSignatureCaller` all depend on one
+    ///      existing. Renouncing would also freeze the ERC-1271 caller set permanently.
     error AtumModule_RenounceOwnershipDisabled();
 
     /// @notice Thrown when a transfer debited the sender by something other than `amount`.
