@@ -328,74 +328,96 @@ contract AtumModuleIntegrationTest is Test {
         module.syncAllowance(address(0));
     }
 
-    /// M-01, the finding itself. An authorisation for one module must be worthless at another
-    /// module sharing the same keeper.
+    /// The on-chain half of M-01: a hash the keeper signed that is not a Permit2 digest for THIS
+    /// Permit2 on THIS chain never reaches the keeper check at all. The module cannot take
+    /// `hash` apart, so the keeper supplies the struct hash and the module rebuilds the digest
+    /// from it under the live domain separator.
+    function test_IsValidSignature_RejectsDigestNotBuiltUnderThePermit2Domain() external view {
+        bytes32 structHash = keccak256("permit2 struct");
+        (bytes32 digest, bytes memory signature) = _keeperApproval(KEEPER_PK, structHash);
+        assertEq(module.isValidSignature(digest, signature), EIP1271_MAGIC, "genuine Permit2 digest");
+
+        // Same struct, same keeper, but a digest built under somebody else's domain separator.
+        bytes32 foreign = keccak256(abi.encodePacked(hex"1901", keccak256("some other domain"), structHash));
+        bytes memory foreignSignature = abi.encode(structHash, _sign(KEEPER_PK, foreign));
+        assertEq(module.isValidSignature(foreign, foreignSignature), EIP1271_FAILURE, "foreign domain");
+
+        // A struct hash that does not rebuild the digest it is presented with is refused even
+        // though the keeper really did sign that digest.
+        bytes memory mismatched = abi.encode(keccak256("unrelated struct"), _sign(KEEPER_PK, digest));
+        assertEq(module.isValidSignature(digest, mismatched), EIP1271_FAILURE, "struct hash does not rebuild");
+    }
+
+    /// The domain separator is read live, not cached. Permit2 rebuilds its own when `chainid`
+    /// moves, so a module holding a construction-time copy would reject every genuine digest
+    /// after a fork -- which is what the removed `permit2DomainSeparator` immutable would have
+    /// done had anything ever read it.
+    function test_IsValidSignature_FollowsThePermit2DomainSeparatorAcrossAFork() external {
+        MockPermit2 forkedPermit2 = new MockPermit2(keccak256("post-fork permit2 domain"));
+        AtumModule forkedModule = new AtumModule(address(forkedPermit2), address(nodeContract), moduleOwner, keeper);
+
+        bytes32 structHash = keccak256("permit2 struct");
+        bytes32 digest = keccak256(abi.encodePacked(hex"1901", forkedPermit2.DOMAIN_SEPARATOR(), structHash));
+        bytes memory signature = abi.encode(structHash, _sign(KEEPER_PK, digest));
+
+        assertEq(forkedModule.isValidSignature(digest, signature), EIP1271_MAGIC);
+    }
+
+    /// A malformed blob must produce the ERC-1271 failure value, not a revert. Permit2 turns a
+    /// revert here into `InvalidContractSignature` and loses the distinction, and `invalidate`
+    /// and `pause` must still be able to answer before the decode is even attempted.
+    function test_IsValidSignature_MalformedSignatureBlobFailsWithoutReverting() external view {
+        bytes32 digest = _permit2Digest(keccak256("permit2 struct"));
+
+        assertEq(module.isValidSignature(digest, ""), EIP1271_FAILURE, "empty");
+        assertEq(module.isValidSignature(digest, hex"dead"), EIP1271_FAILURE, "truncated");
+        // The bare 65-byte signature the keeper used to send, with no struct hash around it.
+        assertEq(module.isValidSignature(digest, _sign(KEEPER_PK, digest)), EIP1271_FAILURE, "unwrapped");
+    }
+
+    /// M-01 IS NOT FIXED ON-CHAIN, and this test exists to keep that visible rather than let a
+    /// reader infer otherwise from the domain separator check above.
     ///
-    /// isValidSignature validated the caller's raw hash straight against the keeper, and the
-    /// digest Permit2 builds does not contain the owner. Two modules with a common keeper
-    /// therefore accepted the identical (hash, signature) pair -- and because Permit2 tracks
-    /// nonces per owner, the same authorisation could be spent once at each. One signature, two
-    /// drains.
-    function test_IsValidSignature_SignatureForOneModuleIsRejectedByAnother() external {
+    /// Permit2's digest does not name the owner, and its domain separator commits only to
+    /// `chainid` and Permit2's own address, so two modules sharing a keeper behind one Permit2
+    /// rebuild the identical value and one authorisation validates at both. Permit2 tracks
+    /// nonces per owner, so it can then be spent once at each.
+    function test_IsValidSignature_CrossModuleReplayIsNotPreventedOnChain() external {
         AtumModule otherModule = new AtumModule(address(permit2), address(nodeContract), moduleOwner, keeper);
 
-        bytes32 permit2Digest = keccak256("shared permit2 digest");
-        bytes memory signature = _signAsKeeper(KEEPER_PK, permit2Digest);
+        (bytes32 digest, bytes memory signature) = _keeperApproval(KEEPER_PK, keccak256("shared permit2 struct"));
 
-        assertEq(module.isValidSignature(permit2Digest, signature), EIP1271_MAGIC, "valid at its own module");
+        assertEq(module.isValidSignature(digest, signature), EIP1271_MAGIC, "valid at its own module");
         assertEq(
-            otherModule.isValidSignature(permit2Digest, signature),
-            EIP1271_FAILURE,
-            "same keeper, different module: replay must not validate"
+            otherModule.isValidSignature(digest, signature),
+            EIP1271_MAGIC,
+            "RESIDUAL RISK (Certora M-01): a shared keeper still validates one authorisation at "
+            "both modules. If this assertion ever starts failing, an on-chain binding was added "
+            "and the audit response must stop describing M-01 as an off-chain control."
         );
-
-        // The exact shape that replayed: a signature over the RAW Permit2 digest. That digest is
-        // byte-identical for both modules because it does not name the owner, so before the fix
-        // BOTH of these returned the magic value off one keeper signature. Both must now refuse.
-        bytes memory rawSignature = _sign(KEEPER_PK, permit2Digest);
-        assertEq(module.isValidSignature(permit2Digest, rawSignature), EIP1271_FAILURE, "raw at module A");
-        assertEq(otherModule.isValidSignature(permit2Digest, rawSignature), EIP1271_FAILURE, "raw at module B");
     }
 
-    /// The other half of M-01: the wrap must actually be required. A keeper that still signs the
-    /// bare Permit2 digest is rejected -- fail-closed, and the reason the keeper has to be cut
-    /// over in lockstep with this deployment.
-    function test_IsValidSignature_RejectsRawPermit2Digest() external view {
-        bytes32 permit2Digest = keccak256("some permit2 digest");
-
-        assertEq(module.isValidSignature(permit2Digest, _sign(KEEPER_PK, permit2Digest)), EIP1271_FAILURE);
-        assertEq(module.isValidSignature(permit2Digest, _signAsKeeper(KEEPER_PK, permit2Digest)), EIP1271_MAGIC);
-    }
-
-    /// The trap inside the M-01 fix. `invalidateDigest` is called with the PERMIT2 digest, which
-    /// is what arrives at isValidSignature as `hash`; the wrap changes what is VALIDATED but must
-    /// not change what is looked up. Key the invalidation map on the wrapped digest instead and
-    /// every previously revoked digest silently becomes live again, while still returning the
-    /// magic value -- invisible until exploited.
-    function test_InvalidateDigest_StillBlocksAfterTheEIP712Wrap() external {
-        bytes32 permit2Digest = keccak256("digest to revoke");
-        bytes memory signature = _signAsKeeper(KEEPER_PK, permit2Digest);
-        assertEq(module.isValidSignature(permit2Digest, signature), EIP1271_MAGIC, "valid first");
-
-        vm.prank(keeper);
-        module.invalidateDigest(permit2Digest);
-
-        assertEq(
-            module.isValidSignature(permit2Digest, signature),
-            EIP1271_FAILURE,
-            "revocation must survive the wrap, keyed on the raw Permit2 digest"
-        );
-        assertTrue(module.isPermitDigestInvalidated(permit2Digest));
-    }
-
-    /// The domain must bind this module's address, which is what makes the replay above fail.
-    function test_KeeperDigest_IsModuleSpecific() external {
+    /// Why binding the module into the Escrow `depositRequestHash` does NOT, on its own, stop the
+    /// M-01 drain -- recorded because it is the obvious reading of "make the witness
+    /// module-specific" and it is wrong.
+    ///
+    /// The witness lives inside the digest, and this module never sees the digest's contents. So
+    /// a digest whose witness commits to module A still satisfies module B's ERC-1271 check
+    /// verbatim, and Permit2 still moves B's tokens. Committing the module address makes the
+    /// resulting deposit RECOGNISABLE as bogus to the off-chain layer afterwards; it does not
+    /// prevent the transfer. Only a keeper that is not shared, or an on-chain check of the
+    /// witness itself, prevents the transfer.
+    function test_IsValidSignature_ModuleBoundWitnessStillValidatesElsewhere() external {
         AtumModule otherModule = new AtumModule(address(permit2), address(nodeContract), moduleOwner, keeper);
-        bytes32 permit2Digest = keccak256("digest");
 
-        assertTrue(
-            module.keeperDigest(permit2Digest) != otherModule.keeperDigest(permit2Digest),
-            "two modules must not ask for the same signature"
+        (bytes32 boundDigest, bytes memory boundSignature) =
+            _keeperApproval(KEEPER_PK, keccak256(abi.encode("deposit request", address(module))));
+
+        assertEq(module.isValidSignature(boundDigest, boundSignature), EIP1271_MAGIC, "bound, own module");
+        assertEq(
+            otherModule.isValidSignature(boundDigest, boundSignature),
+            EIP1271_MAGIC,
+            "the witness is inside the digest, so the other module cannot act on it"
         );
     }
 
@@ -604,9 +626,12 @@ contract AtumModuleIntegrationTest is Test {
 
         assertEq(module.keeper(), newKeeper);
 
-        bytes32 digest = keccak256("permit2 digest");
-        assertEq(module.isValidSignature(digest, _signAsKeeper(KEEPER_PK, digest)), EIP1271_FAILURE);
-        assertEq(module.isValidSignature(digest, _signAsKeeper(NEW_KEEPER_PK, digest)), EIP1271_MAGIC);
+        bytes32 structHash = keccak256("permit2 struct");
+        (bytes32 digest, bytes memory oldKeeperSignature) = _keeperApproval(KEEPER_PK, structHash);
+        (, bytes memory newKeeperSignature) = _keeperApproval(NEW_KEEPER_PK, structHash);
+
+        assertEq(module.isValidSignature(digest, oldKeeperSignature), EIP1271_FAILURE);
+        assertEq(module.isValidSignature(digest, newKeeperSignature), EIP1271_MAGIC);
     }
 
     function test_SetKeeper_RevertsWhenNewKeeperIsZero() external {
@@ -734,22 +759,20 @@ contract AtumModuleIntegrationTest is Test {
     //////////////////////////////////////////////////////////////////////////*/
 
     function test_IsValidSignature_WhenKeeperSignedDigest_ReturnsMagicValue() external view {
-        bytes32 digest = keccak256("permit2 digest");
-        bytes memory signature = _signAsKeeper(KEEPER_PK, digest);
+        (bytes32 digest, bytes memory signature) = _keeperApproval(KEEPER_PK, keccak256("permit2 struct"));
 
         assertEq(module.isValidSignature(digest, signature), EIP1271_MAGIC);
     }
 
     function test_IsValidSignature_WhenOwnerSignedDigest_ReturnsFailureValue() external view {
-        bytes32 digest = keccak256("permit2 digest");
-        bytes memory signature = _sign(MODULE_OWNER_PK, digest);
+        (bytes32 digest,) = _keeperApproval(KEEPER_PK, keccak256("permit2 struct"));
+        bytes memory signature = abi.encode(keccak256("permit2 struct"), _sign(MODULE_OWNER_PK, digest));
 
         assertEq(module.isValidSignature(digest, signature), EIP1271_FAILURE);
     }
 
     function test_IsValidSignature_WhenPaused_ReturnsFailureValue() external {
-        bytes32 digest = keccak256("permit2 digest");
-        bytes memory signature = _signAsKeeper(KEEPER_PK, digest);
+        (bytes32 digest, bytes memory signature) = _keeperApproval(KEEPER_PK, keccak256("permit2 struct"));
 
         vm.prank(moduleOwner);
         module.pause();
@@ -758,8 +781,7 @@ contract AtumModuleIntegrationTest is Test {
     }
 
     function test_OwnerCanUnpauseAndResumeSignatureValidationAndExecution() external {
-        bytes32 digest = keccak256("permit2 digest");
-        bytes memory signature = _signAsKeeper(KEEPER_PK, digest);
+        (bytes32 digest, bytes memory signature) = _keeperApproval(KEEPER_PK, keccak256("permit2 struct"));
 
         vm.prank(moduleOwner);
         module.pause();
@@ -778,8 +800,7 @@ contract AtumModuleIntegrationTest is Test {
     }
 
     function test_InvalidateDigest_MakesPreviouslyValidSignatureFail() external {
-        bytes32 digest = keccak256("permit2 digest");
-        bytes memory signature = _signAsKeeper(KEEPER_PK, digest);
+        (bytes32 digest, bytes memory signature) = _keeperApproval(KEEPER_PK, keccak256("permit2 struct"));
 
         assertEq(module.isValidSignature(digest, signature), EIP1271_MAGIC);
 
@@ -1077,12 +1098,26 @@ contract AtumModuleIntegrationTest is Test {
         assertEq(reason, expectedReason);
     }
 
-    /// @dev What the keeper must now produce: a signature over the module-specific EIP-712
-    ///      digest, not over the bare Permit2 digest (Certora M-01). Mirrors the off-chain change
-    ///      the fix requires -- a keeper still signing the raw digest is rejected, which
-    ///      test_IsValidSignature_RejectsRawPermit2Digest pins.
-    function _signAsKeeper(uint256 privateKey, bytes32 permit2Digest) internal view returns (bytes memory) {
-        return _sign(privateKey, module.keeperDigest(permit2Digest));
+    /// @dev The digest Permit2 builds from `structHash`, which is what reaches the module as
+    ///      `hash`. Mirrors Permit2's own `_hashTypedData`.
+    function _permit2Digest(bytes32 structHash) internal view returns (bytes32) {
+        return keccak256(abi.encodePacked(hex"1901", permit2.DOMAIN_SEPARATOR(), structHash));
+    }
+
+    /// @dev What the keeper must produce: the Permit2 digest, plus the blob it hands Escrow as
+    ///      the deposit signature. The keeper still signs the digest itself -- ordinary Permit2
+    ///      typed data -- and only the envelope around the signature is Atum-specific, carrying
+    ///      the struct hash the module needs to check the Permit2 domain separator.
+    function _keeperApproval(
+        uint256 privateKey,
+        bytes32 structHash
+    )
+        internal
+        view
+        returns (bytes32 digest, bytes memory signature)
+    {
+        digest = _permit2Digest(structHash);
+        signature = abi.encode(structHash, _sign(privateKey, digest));
     }
 
     function _sign(uint256 privateKey, bytes32 digest) internal pure returns (bytes memory signature) {

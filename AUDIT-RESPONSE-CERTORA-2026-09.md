@@ -4,9 +4,9 @@
 
 **Report** Certora draft, September 2026 — 11 findings: 0 critical, 0 high, 1 medium, 4 low, 6 informational
 
-**Status** All 11 addressed. No finding deferred, and none answered with an acknowledgement alone.
+**Status** 10 of 11 fixed. **M-01, the sole Medium, is only partially addressed: the cross-module replay is not prevented on-chain**, and the control relied on is a deployment constraint rather than code. The reasoning is in the M-01 section and should be read before the summary table is taken at face value.
 
-Each fix is accompanied by a regression test. `forge test`: **656 pass, 0 fail, 57 skipped** across 104 suites. `solhint`: 0 errors.
+Each fix is accompanied by a regression test. `forge test`: **657 pass, 0 fail, 57 skipped** across 104 suites. `solhint`: 0 errors.
 
 ---
 
@@ -14,7 +14,7 @@ Each fix is accompanied by a regression test. `forge test`: **656 pass, 0 fail, 
 
 | ID   | Severity | Response                                                     |
 | ---- | -------- | ------------------------------------------------------------ |
-| M-01 | Medium   | Fixed — EIP-712 wrap binding module address and chain id     |
+| M-01 | Medium   | **Partial** — replay not prevented on-chain; see below       |
 | L-01 | Low      | Fixed — creation restricted to the PaymentRails owner        |
 | L-02 | Low      | Fixed — `syncAllowance`, keeper-gated                        |
 | L-03 | Low      | Fixed — addressed together with I-05                         |
@@ -26,28 +26,38 @@ Each fix is accompanied by a regression test. `forge test`: **656 pass, 0 fail, 
 | I-05 | Info     | Fixed — addressed together with L-03                         |
 | I-06 | Info     | Fixed — sender debit now checked                             |
 
-**A key-management constraint accompanies the fix.** M-01's replay is only possible between modules that share a keeper, so modules will be issued distinct keepers. This is a deployment-time constraint on key management, **not enforced on-chain**, and it is stated here because M-01's fix requires a coordinated on-chain and off-chain deployment and so cannot be instantaneous. It reduces exposure in that interval; the fix below is what removes the finding.
+**A key-management constraint carries M-01 on its own.** The replay is only possible between modules that share a keeper, so modules must be issued distinct keepers. This is a deployment-time constraint on key management, **not enforced on-chain**. Unlike in earlier drafts of this response, it is not a stopgap alongside a code fix — it is the only thing preventing the finding, because no on-chain binding ships. See M-01 below.
 
 Two additional observations arising from the review:
 
 1. **L-03 and I-05 describe the same defect from opposite sides**, and are resolved by a single change.
-2. **`permit2DomainSeparator` was unused state** — assigned in the constructor, exposed by a getter, and read nowhere. Removed.
+2. **`permit2DomainSeparator` was unused state** — assigned in the constructor, exposed by a getter, and read nowhere. Removed, and the domain separator is now read live inside `isValidSignature` instead (M-01).
 
 ---
 
 ## M-01 — cross-module signature replay (Medium)
 
+**Status: partially addressed. The cross-module replay is NOT prevented on-chain.** The recommended remediation was implemented and then withdrawn; what replaces it is narrower. This section states what the contracts now do, what they deliberately do not do, and why.
+
 **Mechanism.** `isValidSignature` validated the caller's raw hash directly against the keeper. The digest Permit2 constructs does not contain the owner, and Permit2 tracks nonces per owner. Two modules sharing a keeper therefore accepted the identical `(hash, signature)` pair, and one authorisation could be spent once at each.
 
-**Key-management constraint.** The replay is only possible between modules that share a keeper, so modules will be issued distinct keepers. To be precise about its status: this is a constraint on deployment practice and is **not enforced by the contracts** — nothing in the module or the factory rejects a keeper already in use elsewhere, and `setKeeper` could reintroduce sharing after deployment. It is therefore a reduction in exposure during the interval before the fix is deployed, not a control the code guarantees. The fix below is what removes the finding.
+**Why the recommended EIP-712 wrap was withdrawn.** It was implemented, and it worked: the incoming hash was re-hashed under the module's own EIP-712 domain, binding `address(this)` and `chainid` into the signed payload. The reason it is not shipped is that it is incompatible with how the keeper is being built. The keeper is a policy-gated signer: before releasing a signature it inspects the `PermitWitnessTransferFrom` struct — spender, permitted token and amount, witness members — and refuses anything that does not match an expected payment. Wrapping the digest replaces that struct with a single opaque `bytes32` as the only thing the keeper ever signs, so the policy engine has nothing left to inspect and its checks degrade to a no-op. Trading an enforced off-chain authorisation policy for an on-chain replay binding is not obviously a net gain, and it is not a trade worth making silently.
 
-**Fix.** The incoming hash is wrapped in the module's own EIP-712 domain before validation, binding `address(this)` and `chainid` into the signed payload. `keeperDigest(bytes32)` is exposed so the off-chain signer can compute the value it must sign.
+**What the contracts now enforce: the Permit2 domain separator.** `isValidSignature` cannot take `hash` apart — it is a keccak output — so the keeper supplies the `PermitWitnessTransferFrom` struct hash alongside its signature, in an `encodeKeeperSignature(structHash, signature)` envelope, and the module rebuilds the digest:
 
-**An interaction worth recording.** `_invalidatedPermitDigests` is keyed on the raw hash, and `invalidateDigest` is called with the Permit2 digest — the same value that reaches `isValidSignature`. The wrap changes what is validated; it deliberately does not change what is looked up. Keying that map on the wrapped digest instead would leave previously revoked digests appearing un-invalidated while the function continued to return the ERC-1271 magic value. The pairing is covered by `test_InvalidateDigest_StillBlocksAfterTheEIP712Wrap`.
+```
+keccak256(0x1901 ‖ IPermit2(permit2).DOMAIN_SEPARATOR() ‖ structHash) == hash
+```
 
-**Deployment consequence.** The keeper must sign `keeperDigest(...)` rather than the bare Permit2 digest. A keeper that has not been migrated produces signatures this module rejects, halting payments for that module. The failure mode is fail-closed — no funds are at risk — but the two halves must be deployed together. Sequence: extend the keeper to the new form, deploy the module, migrate the keeper, retire the old form.
+A hash that does not reproduce under the live Permit2 domain separator is refused before the keeper is consulted at all, so this ERC-1271 surface will only ever endorse a genuine Permit2 digest for this Permit2 on this chain. Permit2 forwards the blob verbatim — it length-checks signatures only for EOA signers, never for contract signers (`SignatureVerification.verify`). The separator is read live, not cached: Permit2 rebuilds its own when `chainid` changes, so a construction-time copy goes stale across a fork. This also gives the `permit2DomainSeparator` immutable that was removed as dead state a real job.
 
-**Coverage.** Reverting to raw-hash validation fails seven tests, including `test_IsValidSignature_RejectsRawPermit2Digest` in the opposite direction, confirming that raw digests were previously accepted. `test_IsValidSignature_SignatureForOneModuleIsRejectedByAnother` asserts the exploit shape directly: a single signature over the raw digest, presented to two modules, refused by both.
+**Be precise about what this does not do.** The Permit2 domain separator commits to `chainId` and Permit2's own address — **never to the owner**. Two modules behind one Permit2 on one chain rebuild an identical value, so this check does not narrow M-01 by even one case. It closes a different, smaller gap: hashes that are not Permit2 digests for this chain.
+
+**A tempting mitigation that does not work.** The natural off-chain answer is to make the Escrow `DepositWitness.depositRequestHash` commit to the module address so the digests differ per module. It does make them differ — but it does **not** prevent the drain. The witness lives *inside* the digest, and a module never sees the digest's contents, so a digest whose witness names module A still satisfies module B's ERC-1271 check verbatim and Permit2 still moves B's tokens. Committing the module address makes the resulting deposit *recognisable* as bogus afterwards; it does not stop the transfer. Pinned by `test_IsValidSignature_ModuleBoundWitnessStillValidatesElsewhere`, which exists because this is the intuitive reading and it is wrong.
+
+**What actually prevents it, and what is being relied on.** Two things would: a keeper that is not shared between modules, or an on-chain check of the witness contents (which requires the module to reimplement Permit2's `PermitWitnessTransferFrom` encoding, including the witness type string Escrow owns). Only the first is being relied on. **Distinct keepers per module is therefore the sole control standing between this finding and an exploit**, and it is a deployment-practice constraint rather than a property of the code: nothing in the module or the factory rejects a keeper already in use elsewhere, and `setKeeper` can reintroduce sharing at any time.
+
+**Coverage.** `test_IsValidSignature_CrossModuleReplayIsNotPreventedOnChain` asserts the replay still succeeds, and fails loudly if an on-chain binding is ever added without this section being revised. `test_IsValidSignature_RejectsDigestNotBuiltUnderThePermit2Domain` covers the domain separator check in both directions, `test_IsValidSignature_FollowsThePermit2DomainSeparatorAcrossAFork` covers the live read, and `test_IsValidSignature_MalformedSignatureBlobFailsWithoutReverting` covers the envelope decode failing closed rather than reverting.
 
 ---
 

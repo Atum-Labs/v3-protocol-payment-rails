@@ -10,9 +10,11 @@ import { IERC1271 } from "@openzeppelin/contracts/interfaces/IERC1271.sol";
 /// @dev One module deployment is bound to one immutable PaymentRails. The PaymentRails funds the
 ///      contract through `execute`; the module emits the current available source
 ///      balance and destination details for an offchain keeper, and accepts raw Permit2
-///      digests at its ERC-1271 surface. Those digests are validated against a
-///      MODULE-SPECIFIC EIP-712 wrap of the digest rather than the digest itself, so the
-///      keeper signs {keeperDigest} (Certora M-01).
+///      digests at its ERC-1271 surface. Those digests are validated as presented -- no Atum
+///      wrap -- so the keeper signs ordinary Permit2 typed data, but the module does check the
+///      Permit2 domain separator they were built under, which is why the keeper's signature
+///      travels inside an {encodeKeeperSignature} envelope. Cross-module replay (Certora M-01)
+///      is an off-chain obligation; see {keeper}.
 ///
 ///      The module does not compute request ids, source assets, fulfillment amounts,
 ///      or fees. The keeper derives source details from the log context and prepares
@@ -58,26 +60,38 @@ interface IAtumModule is IActionModule, IERC1271 {
     function paymentRails() external view returns (address);
 
     /// @notice Keeper that authorises Permit2 digests and invalidates abandoned ones.
-    /// @dev Signs {keeperDigest} of a Permit2 digest, not the Permit2 digest itself (Certora
-    ///      M-01). Also the sole caller of {syncAllowance}.
+    /// @dev Signs the Permit2 digest as Permit2 builds it, with no Atum wrap applied, so its
+    ///      signing policy can still read the struct it is approving. What it hands to Escrow as
+    ///      the deposit signature is the {encodeKeeperSignature} envelope, not the bare 65 bytes.
+    ///
+    ///      Certora M-01 requires that digest to be specific to this module, which the keeper
+    ///      must secure OFF-CHAIN by making the Escrow `DepositWitness.depositRequestHash` commit
+    ///      to the module address. The module cannot check it: ERC-1271 receives only the hash.
+    ///      Also the sole caller of {syncAllowance}.
     function keeper() external view returns (address);
 
-    /// @notice EIP-712 type hash for the keeper's approval of a Permit2 digest.
-    /// @dev Certora M-01.
-    function KEEPER_APPROVAL_TYPEHASH() external view returns (bytes32);
+    /// @notice Builds the ERC-1271 signature blob the keeper must give Atum Escrow.
+    /// @dev The module validates the Permit2 DOMAIN SEPARATOR the digest was built under, and a
+    ///      keccak digest cannot be taken apart, so the struct hash travels alongside the
+    ///      signature. Permit2 forwards this blob to `isValidSignature` verbatim -- it only
+    ///      length-checks signatures for EOA signers, never for contract signers.
+    /// @param permit2StructHash The `PermitWitnessTransferFrom` struct hash `hash` was built from.
+    /// @param keeperSignature The keeper's signature over the Permit2 digest itself.
+    function encodeKeeperSignature(
+        bytes32 permit2StructHash,
+        bytes calldata keeperSignature
+    )
+        external
+        pure
+        returns (bytes memory encoded);
 
-    /// @notice The digest the keeper must sign for `permit2Digest` to be accepted by THIS module.
-    /// @dev Certora M-01. `isValidSignature` used to validate the raw hash against the keeper, and
-    ///      Permit2's digest does not contain the owner, so any two modules sharing a keeper
-    ///      accepted the same (hash, signature) pair -- and Permit2's nonces are per owner, so a
-    ///      single authorisation could be replayed to drain each of them. Wrapping the digest in
-    ///      this module's EIP-712 domain binds `address(this)` and `chainid` into what is signed.
-    ///
-    ///      OFF-CHAIN CONSEQUENCE: the keeper must sign THIS value, not the bare Permit2 digest.
-    ///      A keeper that has not been updated produces signatures this module rejects, which
-    ///      stops payments for it until the keeper is cut over. That is fail-closed, but it is a
-    ///      coordinated deploy and not a drop-in.
-    function keeperDigest(bytes32 permit2Digest) external view returns (bytes32);
+    /// @notice Decodes an {encodeKeeperSignature} blob.
+    /// @dev External so `isValidSignature` can decode through a self-call and return the ERC-1271
+    ///      failure value on a malformed blob instead of reverting.
+    function decodeKeeperSignature(bytes calldata encoded)
+        external
+        pure
+        returns (bytes32 permit2StructHash, bytes memory keeperSignature);
 
     /// @notice Destination route the currently-staged balance was pulled for, as
     ///         `keccak256(abi.encode(AtumPaymentParams))`. Zero when nothing is staged.
@@ -100,9 +114,7 @@ interface IAtumModule is IActionModule, IERC1271 {
     function syncAllowance(address token) external returns (uint256 available);
 
     /// @notice Returns whether a Permit2 digest has been permanently invalidated.
-    /// @dev Keyed on the RAW Permit2 digest, not on {keeperDigest} of it. The EIP-712 wrap
-    ///      introduced for Certora M-01 changed what is validated, deliberately not what is
-    ///      looked up here.
+    /// @dev Keyed on the Permit2 digest as Permit2 presents it to `isValidSignature`.
     function isPermitDigestInvalidated(bytes32 digest) external view returns (bool);
 
     /// @notice Source amount per token that Permit2 is currently approved to pull.
@@ -129,13 +141,11 @@ interface IAtumModule is IActionModule, IERC1271 {
     function unpause() external;
 
     /// @notice Keeper- or owner-callable permanent invalidation of an abandoned Permit2 digest.
-    /// @dev Pass the RAW Permit2 digest -- the same value Permit2 presents to `isValidSignature`
-    ///      -- not {keeperDigest} of it. Passing the wrapped digest records a revocation that
-    ///      will never be consulted, leaving the intended digest live.
+    /// @dev Pass the Permit2 digest -- the same value Permit2 presents to `isValidSignature`.
     function invalidateDigest(bytes32 digest) external;
 
     /// @notice Keeper- or owner-callable permanent invalidation of multiple abandoned Permit2 digests.
-    /// @dev Raw Permit2 digests, as for {invalidateDigest}.
+    /// @dev Permit2 digests, as for {invalidateDigest}.
     function invalidateDigests(bytes32[] calldata digests) external;
 
     /// @notice Owner-only paused recovery that returns the full current token balance to the immutable PaymentRails.

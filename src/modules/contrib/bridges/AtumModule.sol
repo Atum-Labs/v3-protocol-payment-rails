@@ -3,6 +3,7 @@ pragma solidity ^0.8.29;
 
 import { IAtumModule } from "../../../interfaces/IAtumModule.sol";
 import { IActionModule } from "../../../interfaces/IActionModule.sol";
+import { IPermit2 } from "../../../interfaces/IPermit2.sol";
 import { ActionModuleBase } from "../../../abstracts/ActionModuleBase.sol";
 import { DataTypes } from "../../../types/DataTypes.sol";
 import { Errors } from "../../../libraries/Errors.sol";
@@ -11,7 +12,6 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
 import { SignatureChecker } from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import { Ownable2Step, Ownable } from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
-import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
 /// @title AtumModule
 /// @custom:tier contrib
@@ -21,10 +21,12 @@ import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 /// @dev Each module deployment is permanently bound to one immutable PaymentRails. The module
 ///      is funded by that PaymentRails through `execute`, emits the current available source
 ///      balance and destination details for an offchain Atum keeper, and accepts generic
-///      Permit2 digests at its ERC-1271 surface. A digest is validated against a
-///      MODULE-SPECIFIC EIP-712 wrap of it rather than against the digest itself, so the keeper
-///      signs `keeperDigest(...)` (Certora M-01). Digest invalidation stays keyed on the raw
-///      digest.
+///      Permit2 digests at its ERC-1271 surface. A digest is validated as presented, with no
+///      Atum wrap applied to it, so the keeper signs ordinary Permit2 typed data and its
+///      signing policy can still read the struct it is approving. The module does verify the
+///      Permit2 domain separator the digest was built under, so the keeper's signature reaches
+///      it inside an `encodeKeeperSignature` envelope carrying the struct hash. Cross-module
+///      replay (Certora M-01) is an OFF-CHAIN obligation -- see `isValidSignature`.
 ///
 ///      The module does not call Atum Escrow, compute request ids, compute fulfillment
 ///      amounts, decode Atum witness data, inspect Escrow state, classify payment
@@ -53,16 +55,21 @@ import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 ///        funds return, call `syncAllowance(token)` and then initiate a new payment request
 ///        for the current module balance. The allowance does not track inbound transfers, so
 ///        without the sync the refund is visible but not pullable (Certora L-02).
+///      - Make the Escrow `DepositWitness.depositRequestHash` commit to this module's address,
+///        so the Permit2 digest is specific to this module (Certora M-01). Escrow defines that
+///        derivation off-chain; neither contract enforces it.
+///      - Pass the deposit signature as `encodeKeeperSignature(structHash, signature)`, not as
+///        the bare 65 bytes: the module rebuilds the digest from the struct hash to check the
+///        Permit2 domain separator.
 ///      - Invalidate abandoned floating Permit2 digests before signing replacement
-///        requests when those stale digests must not remain usable. Invalidate the RAW
-///        Permit2 digest, not `keeperDigest(...)` of it.
+///        requests when those stale digests must not remain usable.
 ///
 ///      Pause is a rare fail-safe control for return-to-PaymentRails recovery. It blocks
 ///      new `execute` calls, ERC-1271 validation and `syncAllowance`, makes `validate` fail, and
 ///      enables return-to-PaymentRails recovery. It does not revoke Permit2 approvals, invalidate
 ///      digests permanently, block inbound refunds or direct transfers, prove refund
 ///      attribution, or undo already consumed Permit2 nonces.
-contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EIP712 {
+contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable {
     using SafeERC20 for IERC20;
     using SignatureChecker for address;
 
@@ -94,9 +101,6 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
     address public override keeper;
 
     /// @dev Permit2 digests that must no longer satisfy ERC-1271 checks.
-    /// @inheritdoc IAtumModule
-    bytes32 public constant override KEEPER_APPROVAL_TYPEHASH = keccak256("AtumKeeperApproval(bytes32 permit2Digest)");
-
     mapping(bytes32 digest => bool invalidated) private _invalidatedPermitDigests;
 
     /// @inheritdoc IAtumModule
@@ -125,15 +129,7 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
     /// @param _paymentRails Immutable PaymentRails allowed to call `execute`.
     /// @param _owner Module owner authorized to manage operations and keeper rotation.
     /// @param _keeper Keeper whose signatures validate Atum Permit2 digests.
-    constructor(
-        address _permit2,
-        address _paymentRails,
-        address _owner,
-        address _keeper
-    )
-        Ownable(_owner)
-        EIP712("AtumModule", "1")
-    {
+    constructor(address _permit2, address _paymentRails, address _owner, address _keeper) Ownable(_owner) {
         if (_permit2 == address(0)) revert Errors.AtumModule_ZeroPermit2();
         if (_paymentRails == address(0)) revert Errors.AtumModule_ZeroPaymentRails();
         if (_keeper == address(0)) revert Errors.AtumModule_ZeroKeeper();
@@ -334,34 +330,48 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
 
     /// @notice Validates that `signature` was signed by the module keeper for `hash`.
     function isValidSignature(bytes32 hash, bytes memory signature) external view override returns (bytes4) {
-        // INVALIDATION IS KEYED ON THE RAW `hash`, NOT THE WRAPPED ONE. This is the part of the
-        // M-01 fix that can silently break the kill-switch: `invalidateDigest` is called by the
-        // keeper with the Permit2 digest it produced, which is exactly the value arriving here as
-        // `hash`. Re-keying this lookup to the wrapped digest would leave every previously
-        // invalidated digest looking un-invalidated, and this function would keep returning the
-        // magic value for a digest an operator believes they revoked -- a failure that is invisible
-        // until it is exploited. The pairing is pinned by test_InvalidateDigest_StillBlocks...
         if (paused() || _invalidatedPermitDigests[hash]) {
             return EIP1271_FAILURE_VALUE;
         }
 
-        // Certora M-01: validate a MODULE-SPECIFIC digest, not the caller's raw one.
+        // The module does NOT wrap `hash` in an Atum EIP-712 domain. Whatever it wrapped the
+        // digest in would become the only thing the keeper ever signed, and the keeper's signing
+        // policy reads the Permit2 struct -- spender, token, amount, witness members -- to decide
+        // whether to release a signature at all. A wrap replaces that struct with one opaque
+        // 32-byte field and blinds the policy. So the keeper keeps signing Permit2 typed data,
+        // and `hash` is validated as presented.
         //
-        // The raw hash was checked straight against the keeper, and the hash Permit2 builds does
-        // not contain the owner. Two modules sharing a keeper therefore accepted the very same
-        // (hash, signature) pair, and Permit2 tracks nonces per owner, so one authorisation drained
-        // both. Wrapping in this module's EIP-712 domain binds `address(this)` and `chainid` into
-        // what the keeper actually signs, so a signature for module A is meaningless at module B.
-        if (keeper.isValidSignatureNow(keeperDigest(hash), signature)) {
+        // What IS checked here is the domain separator the digest was built under. `hash` is a
+        // keccak output and cannot be taken apart, so the keeper supplies the struct hash
+        // alongside its signature and the module rebuilds the digest from it. A value that does
+        // not reproduce `hash` under the live Permit2 domain separator is not a Permit2 digest
+        // for this Permit2 on this chain, and the keeper's ERC-1271 surface will not consider it.
+        //
+        // Read live rather than cached at construction: Permit2 rebuilds its own separator when
+        // `chainid` changes, so a value fixed in the constructor goes stale across a fork. The
+        // dead `permit2DomainSeparator` immutable this replaces cached exactly that stale value.
+        (bool decoded, bytes32 permit2StructHash, bytes memory keeperSignature) = _decodeKeeperSignature(signature);
+        if (!decoded) {
+            return EIP1271_FAILURE_VALUE;
+        }
+
+        bytes32 rebuilt =
+            keccak256(abi.encodePacked(hex"1901", IPermit2(permit2).DOMAIN_SEPARATOR(), permit2StructHash));
+        if (rebuilt != hash) {
+            return EIP1271_FAILURE_VALUE;
+        }
+
+        // Certora M-01 is NOT answered here and cannot be: the domain separator commits to
+        // `chainid` and Permit2's own address, never to the owner, so two modules behind one
+        // Permit2 on one chain rebuild the identical value. Making the digest module-specific is
+        // an OFF-CHAIN obligation on the keeper -- `depositRequestHash` in the Atum Escrow
+        // DepositWitness must commit to this module's address. Escrow defines that derivation
+        // off-chain and nothing on either side enforces it.
+        if (keeper.isValidSignatureNow(hash, keeperSignature)) {
             return EIP1271_MAGIC_VALUE;
         }
 
         return EIP1271_FAILURE_VALUE;
-    }
-
-    /// @inheritdoc IAtumModule
-    function keeperDigest(bytes32 permit2Digest) public view override returns (bytes32) {
-        return _hashTypedDataV4(keccak256(abi.encode(KEEPER_APPROVAL_TYPEHASH, permit2Digest)));
     }
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -429,6 +439,27 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
     /// @inheritdoc IAtumModule
     function encodeParams(DataTypes.AtumPaymentParams calldata params) external pure returns (bytes memory encoded) {
         return abi.encode(params.destinationChain, params.destinationAccount, params.destinationAsset);
+    }
+
+    /// @inheritdoc IAtumModule
+    function encodeKeeperSignature(
+        bytes32 permit2StructHash,
+        bytes calldata keeperSignature
+    )
+        external
+        pure
+        returns (bytes memory encoded)
+    {
+        return abi.encode(permit2StructHash, keeperSignature);
+    }
+
+    /// @inheritdoc IAtumModule
+    function decodeKeeperSignature(bytes calldata encoded)
+        public
+        pure
+        returns (bytes32 permit2StructHash, bytes memory keeperSignature)
+    {
+        (permit2StructHash, keeperSignature) = abi.decode(encoded, (bytes32, bytes));
     }
 
     /// @inheritdoc IAtumModule
@@ -522,6 +553,21 @@ contract AtumModule is IAtumModule, ActionModuleBase, Ownable2Step, Pausable, EI
         uint256 debited = senderBalanceBefore > senderBalanceAfter ? senderBalanceBefore - senderBalanceAfter : 0;
         if (debited != amount) {
             revert Errors.AtumModule_UnsupportedTokenDebitedAmount(amount, debited);
+        }
+    }
+
+    /// @dev A malformed blob has to FAIL the ERC-1271 check rather than revert out of it, so the
+    ///      decode goes through an external self-call and its failure is caught -- the same shape
+    ///      `_decodeAndValidatePaymentParams` uses for `decodeParams`.
+    function _decodeKeeperSignature(bytes memory signature)
+        private
+        view
+        returns (bool valid, bytes32 permit2StructHash, bytes memory keeperSignature)
+    {
+        try this.decodeKeeperSignature(signature) returns (bytes32 structHash, bytes memory keeperSig) {
+            return (true, structHash, keeperSig);
+        } catch {
+            return (false, bytes32(0), "");
         }
     }
 
