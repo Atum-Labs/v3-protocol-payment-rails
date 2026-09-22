@@ -4,9 +4,9 @@
 
 **Report** Certora draft, September 2026 — 11 findings: 0 critical, 0 high, 1 medium, 4 low, 6 informational
 
-**Status** All 11 addressed. No finding deferred, and none answered with an acknowledgement alone.
+**Status** 10 of 11 fixed. **M-01, the sole Medium, is only partially addressed: the cross-module replay is not prevented on-chain**, and the control relied on is a deployment constraint rather than code. Read the M-01 section before taking the summary table at face value.
 
-Each fix is accompanied by a regression test. `forge test`: **656 pass, 0 fail, 57 skipped** across 104 suites. `solhint`: 0 errors.
+Each fix is accompanied by a regression test. `forge test`: **658 pass, 0 fail, 57 skipped** across 104 suites. `solhint`: 0 errors.
 
 ---
 
@@ -14,7 +14,7 @@ Each fix is accompanied by a regression test. `forge test`: **656 pass, 0 fail, 
 
 | ID   | Severity | Response                                                     |
 | ---- | -------- | ------------------------------------------------------------ |
-| M-01 | Medium   | Fixed — EIP-712 wrap binding module address and chain id     |
+| M-01 | Medium   | **Partial** — ERC-1271 caller allowlist; replay not fixed    |
 | L-01 | Low      | Fixed — creation restricted to the PaymentRails owner        |
 | L-02 | Low      | Fixed — `syncAllowance`, keeper-gated                        |
 | L-03 | Low      | Fixed — addressed together with I-05                         |
@@ -26,7 +26,7 @@ Each fix is accompanied by a regression test. `forge test`: **656 pass, 0 fail, 
 | I-05 | Info     | Fixed — addressed together with L-03                         |
 | I-06 | Info     | Fixed — sender debit now checked                             |
 
-**A key-management constraint accompanies the fix.** M-01's replay is only possible between modules that share a keeper, so modules will be issued distinct keepers. This is a deployment-time constraint on key management, **not enforced on-chain**, and it is stated here because M-01's fix requires a coordinated on-chain and off-chain deployment and so cannot be instantaneous. It reduces exposure in that interval; the fix below is what removes the finding.
+**A key-management constraint carries M-01 on its own.** The replay is only possible between modules that share a keeper, so modules must be issued distinct keepers. This is a deployment-time constraint on key management, **not enforced on-chain**. It is not a stopgap alongside a code fix — it is the only thing preventing the finding, because no on-chain binding ships. See M-01 below.
 
 Two additional observations arising from the review:
 
@@ -37,17 +37,23 @@ Two additional observations arising from the review:
 
 ## M-01 — cross-module signature replay (Medium)
 
+**Status: partially addressed. The cross-module replay described in the report is NOT prevented on-chain.** The recommended remediation was implemented, found to be incompatible with the keeper's authorisation model, and withdrawn. What ships instead addresses the *generalisation* the report raises but not its central example. This section is explicit about which is which.
+
 **Mechanism.** `isValidSignature` validated the caller's raw hash directly against the keeper. The digest Permit2 constructs does not contain the owner, and Permit2 tracks nonces per owner. Two modules sharing a keeper therefore accepted the identical `(hash, signature)` pair, and one authorisation could be spent once at each.
 
-**Key-management constraint.** The replay is only possible between modules that share a keeper, so modules will be issued distinct keepers. To be precise about its status: this is a constraint on deployment practice and is **not enforced by the contracts** — nothing in the module or the factory rejects a keeper already in use elsewhere, and `setKeeper` could reintroduce sharing after deployment. It is therefore a reduction in exposure during the interval before the fix is deployed, not a control the code guarantees. The fix below is what removes the finding.
+**Why the recommended EIP-712 wrap was withdrawn.** It was implemented and it worked, binding `address(this)` and `chainid` into the signed payload. It is not shipped because it is incompatible with how the keeper authorises payments. The keeper is a policy-gated signer whose policy inspects the `PermitWitnessTransferFrom` struct — spender, permitted token and amount, and the witness members that carry the payout instruction — and refuses to release a signature for anything that does not match an expected payment. Wrapping makes the only thing the keeper ever signs an opaque `bytes32`, leaving that policy nothing to read; in the deployed configuration the wrapped payload matches no allow rule at all and simply cannot be signed. Trading an enforced authorisation policy for an on-chain replay binding is not a clear net gain, and not a trade to make silently.
 
-**Fix.** The incoming hash is wrapped in the module's own EIP-712 domain before validation, binding `address(this)` and `chainid` into the signed payload. `keeperDigest(bytes32)` is exposed so the off-chain signer can compute the value it must sign.
+**What the module enforces instead: who may ask.** `isValidSignature` answers only callers in `isAuthorizedSignatureCaller`, seeded with Permit2 at construction and otherwise an explicit owner decision through `setSignatureCaller`. This is aimed squarely at the report's own generalisation — *"The problem is not specific to Permit2; Permit2 is one confirmed exploitation path."* A keeper signature was a bearer token at every ERC-1271 surface treating this module as a signer; it is now confined to applications that were deliberately trusted, which turns an open-ended exposure into a bounded one.
 
-**An interaction worth recording.** `_invalidatedPermitDigests` is keyed on the raw hash, and `invalidateDigest` is called with the Permit2 digest — the same value that reaches `isValidSignature`. The wrap changes what is validated; it deliberately does not change what is looked up. Keying that map on the wrapped digest instead would leave previously revoked digests appearing un-invalidated while the function continued to return the ERC-1271 magic value. The pairing is covered by `test_InvalidateDigest_StillBlocksAfterTheEIP712Wrap`.
+**Why nothing more is enforceable at this layer.** ERC-1271 supplies a 32-byte keccak output and no preimage. The domain the digest was built under, the spender it names, the amount it moves and the witness it carries are all unreachable from inside the module. Any check the module could make about the digest's *contents* would either require the caller to supply the preimage — which the caller is the attacker in the replay scenario — or re-derive what the constructing application already guarantees. Permit2 builds the digest under its own domain separator and cannot present anything else; Escrow fixes the witness. Re-deriving either inside the module checks those contracts against themselves.
 
-**Deployment consequence.** The keeper must sign `keeperDigest(...)` rather than the bare Permit2 digest. A keeper that has not been migrated produces signatures this module rejects, halting payments for that module. The failure mode is fail-closed — no funds are at risk — but the two halves must be deployed together. Sequence: extend the keeper to the new form, deploy the module, migrate the keeper, retire the old form.
+**Be precise about what the allowlist does not do.** It does not narrow the reported replay by a single case. Two modules sharing a keeper sit behind the *same* Permit2 — there is one per chain — so both authorise it and both still validate the identical `(hash, signature)` pair.
 
-**Coverage.** Reverting to raw-hash validation fails seven tests, including `test_IsValidSignature_RejectsRawPermit2Digest` in the opposite direction, confirming that raw digests were previously accepted. `test_IsValidSignature_SignatureForOneModuleIsRejectedByAnother` asserts the exploit shape directly: a single signature over the raw digest, presented to two modules, refused by both.
+**What actually prevents the reported replay.** Two things, neither of them in this module. A keeper that is not shared between modules; or a digest whose contents name the module, which means the Atum Escrow `DepositWitness` carrying the depositor so that the digest differs per module. Escrow's witness is versioned and negotiated per chain via `deposit_witness_version`, so that is an available path rather than a hypothetical one, but it is a change to the Escrow contract and its encoders, not to this repo. **Until it exists, distinct keepers per module is the sole control**, and it is a deployment-practice constraint rather than a property of the code: nothing in the module or the factory rejects a keeper already in use elsewhere, and `setKeeper` can reintroduce sharing at any time.
+
+**A mitigation that does not work, recorded because it is the intuitive one.** Making the Escrow `depositRequestHash` commit to the module address is not sufficient on its own. The witness lives inside the digest and a module cannot see the digest's contents, so a digest whose witness names module A still satisfies module B's ERC-1271 check verbatim and Permit2 still moves B's tokens. It makes the resulting deposit recognisable as bogus afterwards; it does not prevent the transfer. Escrow must also refuse a deposit whose witness names an address other than the debited owner — which it gets for free if it builds the witness hash from `depositInput.depositor` directly.
+
+**Coverage.** `test_IsValidSignature_RejectsUnauthorizedCallers` covers the allowlist, including `address(0)`, the keeper and the owner. `test_Constructor_AuthorizesPermit2AndEmitsIt` pins the seeded entry and its log. `test_SetSignatureCaller_OwnerCanAuthorizeAndRevoke` covers both directions and that revocation leaves Permit2 intact. `test_IsValidSignature_CrossModuleReplayIsNotPreventedOnChain` asserts the replay still succeeds, and fails loudly if an on-chain binding is ever added without this section being revised.
 
 ---
 
