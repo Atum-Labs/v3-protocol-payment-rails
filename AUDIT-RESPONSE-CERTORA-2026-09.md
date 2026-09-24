@@ -6,7 +6,7 @@
 
 **Status** All 11 addressed. **M-01, the sole Medium, is answered differently from the report's recommendation**: the replay is prevented by the Atum Escrow integration rather than by a digest binding in the module, which is the case the report's own Impact paragraph anticipates. The M-01 section sets out the four links and what they rest on.
 
-Three further observations raised during the fix review are answered under [Fix-review follow-on](#fix-review-follow-on-three-observations-on-the-mitigations): one fixed, two acknowledged with the reasoning recorded.
+Three further observations raised during the fix review are answered under [Fix-review follow-on](#fix-review-follow-on-three-observations-on-the-mitigations): two fixed, one acknowledged with the reasoning recorded.
 
 Each fix is accompanied by a regression test. `forge test`: **664 pass, 0 fail, 57 skipped** across 104 suites. `solhint`: 0 errors.
 
@@ -202,17 +202,15 @@ Documented on `IAtumModule.stagedRoute` and the module header, and pinned by `te
 
 > **Raised with the auditor and closed.** We asked whether an `onlyOwner clearStagedRoute(address token)` emitting an event would be accepted, so that a deliberate redirect is explicit and logged rather than requiring a pause and a full sweep. Declined, and we agree with the reasoning: because refunds can land unexpectedly and be picked up by `syncAllowance`, clearing the record would not address the underlying behaviour. The finding is recorded as acknowledged with both halves: a config change cannot redirect a balance this module currently holds; a later refund can be paid to the new route, and that is accepted. No function was added.
 
-### 3. `_checkPaymentRailsOwner` does not verify that `paymentRails` is a PaymentRails — acknowledged
+### 3. `_checkPaymentRailsOwner` does not verify that `paymentRails` is a PaymentRails — fixed
 
-The conclusion is correct. One correction to the mechanism, because it affects reproducibility.
+The conclusion was correct, and the mechanism needed one correction: `Ownable(paymentRails).owner()` is called by the factory, so a contract whose `owner()` returns `msg.sender` does not satisfy the check. The shape that works is a contract returning a hardcoded caller-controlled address.
 
-**A contract whose `owner()` returns `msg.sender` does not satisfy the check.** `Ownable(paymentRails).owner()` is called by the *factory*, so `msg.sender` inside the callee is the factory address; the comparison then evaluates caller-versus-factory and reverts with `AtumModuleFactory_NotPaymentRailsOwner`. The shape that works is a contract returning a hardcoded caller-controlled address. Verified in both directions.
+Shape probes stay out. ERC-165, `getTokenConfig`, and any marker function are forgeable by the contract being probed. The check that is not forgeable is membership in PaymentRailsFactory. That factory records every PaymentRails it deploys, and only its owner can add to the list. `AtumModuleFactory` now reverts with `AtumModuleFactory_PaymentRailsNotContract` when `paymentRails` has no code, then with `AtumModuleFactory_UnknownPaymentRails` unless `paymentRailsFactory.isDeployedInstance(paymentRails)` is true, and only then reads `owner()`. Once the address is on that list, the code is a real PaymentRails and its `owner()` answer can be trusted.
 
-The check is an authorisation check over registry writes, not a type assertion, and was scoped to L-01 only. Its impact is bounded by the same quirk: because `owner()` must return `msg.sender`, a caller can only register against a contract that names them, and cannot write into another party's listing. What remains is entries under addresses they already control — registry noise, on top of the unbounded `_deployedModules` growth already documented.
+A PaymentRails deployed outside the factory is rejected. That is the cost of trusting the list. `new AtumModule(...)` still bypasses this factory, so the module registry remains informational.
 
-**No type probe will be added.** The factory is not a trust root: `new AtumModule(permit2, anyRails, attacker, attacker)` bypasses it entirely, so no check here can establish a property about modules in general. And every available probe — ERC-165, calling `getTokenConfig`, any marker function — is a shape check, equally forgeable by the contract being probed. Adding one would turn an informational registry into one that looks authoritative and is not. `PaymentRails.configureToken` already probes `IActionModule.moduleType()` in a `try`/`catch` and is likewise a sanity check rather than proof.
-
-The factory NatSpec now states that the owner check gates who may write and asserts nothing about what `paymentRails` is.
+Pinned by `test_Create_RevertsWhenPaymentRailsIsALookalike` and `test_Create_RevertsWhenPaymentRailsWasNotDeployedByTheFactory`.
 
 ---
 

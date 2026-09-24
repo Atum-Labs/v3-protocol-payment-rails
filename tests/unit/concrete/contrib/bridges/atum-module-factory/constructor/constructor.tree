@@ -3,5 +3,9 @@ AtumModuleFactory_Constructor
 │   └── it should revert with AtumModuleFactory_ZeroPermit2
 ├── when permit2 has no code
 │   └── it should revert with AtumModuleFactory_Permit2NotContract
+├── when the PaymentRailsFactory is the zero address
+│   └── it should revert with AtumModuleFactory_ZeroPaymentRailsFactory
+├── when the PaymentRailsFactory has no code
+│   └── it should revert with AtumModuleFactory_PaymentRailsFactoryNotContract
 └── when permit2 is a valid contract
-    └── it should set permit2
+    └── it should set permit2 and the PaymentRailsFactory

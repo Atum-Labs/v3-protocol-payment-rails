@@ -5,6 +5,8 @@ AtumModuleFactory_Create
 │   └── it should revert with AtumModuleFactory_ZeroPaymentRails
 ├── when keeper is zero address
 │   └── it should revert with AtumModuleFactory_ZeroKeeper
+├── when paymentRails was not deployed by PaymentRailsFactory
+│   └── it should revert with AtumModuleFactory_UnknownPaymentRails
 └── when params are valid
     ├── it should deploy a new AtumModule contract
     ├── it should set the owner on the deployed module

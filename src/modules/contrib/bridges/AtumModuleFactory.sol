@@ -2,6 +2,7 @@
 pragma solidity 0.8.29;
 
 import { IAtumModuleFactory } from "../../../interfaces/IAtumModuleFactory.sol";
+import { IPaymentRailsFactory } from "../../../interfaces/IPaymentRailsFactory.sol";
 import { AtumModule } from "./AtumModule.sol";
 import { Errors } from "../../../libraries/Errors.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
@@ -12,15 +13,14 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 /// @custom:audit-status unaudited
 /// @author Credit Cooperative
 /// @notice See the documentation in {IAtumModuleFactory}.
-/// @dev `create`/`createDeterministic` require the caller to be the owner of the supplied
-///      PaymentRails (Certora L-01); they were permissionless until that finding, which let anyone
-///      record a module against another party's PaymentRails. The registry is still informational
-///      only — membership is NOT an authorization or trust signal, and `_deployedModules` grows
-///      unbounded. Consumers must verify a module's `owner`/`keeper`/`paymentRails` wiring rather
-///      than trusting registry presence, and read `getDeployedModules` offchain (it returns the
-///      full array). Note the owner check constrains who may WRITE to the registry; it does not
-///      make presence in it meaningful, and a module deployed directly rather than through this
-///      factory is unaffected by it.
+/// @dev `create`/`createDeterministic` require two things of `paymentRails`. It must be an instance
+///      {paymentRailsFactory} deployed — only that factory's owner can add to the list, so a
+///      lookalike cannot get on it — and the caller must be its owner (Certora L-01). The module
+///      registry is still informational only: membership is NOT an authorization or trust signal,
+///      `_deployedModules` grows unbounded, and a module deployed with `new AtumModule(...)` rather
+///      than through this factory is unaffected. Consumers must verify a module's
+///      `owner`/`keeper`/`paymentRails` wiring rather than trusting registry presence, and read
+///      `getDeployedModules` offchain (it returns the full array).
 contract AtumModuleFactory is IAtumModuleFactory {
     /*//////////////////////////////////////////////////////////////////////////
                                 IMMUTABLE STATE
@@ -28,6 +28,9 @@ contract AtumModuleFactory is IAtumModuleFactory {
 
     /// @inheritdoc IAtumModuleFactory
     address public immutable override permit2;
+
+    /// @inheritdoc IAtumModuleFactory
+    IPaymentRailsFactory public immutable override paymentRailsFactory;
 
     /*//////////////////////////////////////////////////////////////////////////
                                     STORAGE
@@ -49,7 +52,10 @@ contract AtumModuleFactory is IAtumModuleFactory {
     /// @dev Permit2 is fixed at factory deployment so the registry guarantees the wiring of every
     /// module it lists, not just the bytecode.
     /// @param _permit2 The canonical Permit2 contract on this chain.
-    constructor(address _permit2) {
+    /// @param _paymentRailsFactory PaymentRailsFactory whose deployment list is the record of real
+    ///        PaymentRails. Fixed here so every module this factory deploys is checked against the
+    ///        same list.
+    constructor(address _permit2, IPaymentRailsFactory _paymentRailsFactory) {
         if (_permit2 == address(0)) {
             revert Errors.AtumModuleFactory_ZeroPermit2();
         }
@@ -61,8 +67,15 @@ contract AtumModuleFactory is IAtumModuleFactory {
         if (_permit2.code.length == 0) {
             revert Errors.AtumModuleFactory_Permit2NotContract(_permit2);
         }
+        if (address(_paymentRailsFactory) == address(0)) {
+            revert Errors.AtumModuleFactory_ZeroPaymentRailsFactory();
+        }
+        if (address(_paymentRailsFactory).code.length == 0) {
+            revert Errors.AtumModuleFactory_PaymentRailsFactoryNotContract(address(_paymentRailsFactory));
+        }
 
         permit2 = _permit2;
+        paymentRailsFactory = _paymentRailsFactory;
     }
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -160,41 +173,30 @@ contract AtumModuleFactory is IAtumModuleFactory {
                             PRIVATE FUNCTIONS
     //////////////////////////////////////////////////////////////////////////*/
 
-    /// @dev Certora L-01: only the PaymentRails owner may create a module bound to it.
+    /// @dev Certora L-01, plus a provenance check on what `paymentRails` is.
     ///
     ///      Creation was permissionless, so anyone could deploy a genuine factory module naming a
-    ///      victim's PaymentRails while making themselves its owner and keeper. The result passes
-    ///      `isDeployedModule` and shows up in `getModulesForPaymentRails(victim)`. The registry
-    ///      documents itself as informational, which is a fair answer to "is this authorisation?"
-    ///      but not to "can a stranger write into my listing?" -- this closes the write.
+    ///      victim's PaymentRails while making themselves its owner and keeper. Requiring the
+    ///      caller to be `Ownable(paymentRails).owner()` closes that write.
+    ///
+    ///      `owner()` alone is not a type check: any contract can return a chosen address.
+    ///      Membership in {paymentRailsFactory} is. That factory records every PaymentRails it
+    ///      deploys, and only its owner can add to the list, so a lookalike can copy `owner()` and
+    ///      still fail `isDeployedInstance`. Once that passes, the code at `paymentRails` is a
+    ///      real PaymentRails and its `owner()` answer can be trusted. A PaymentRails deployed
+    ///      outside the factory is rejected; that is the cost of trusting the list. The code-length
+    ///      check stays in front of it, so an EOA fails by name before the registry read.
     ///
     ///      OPERATIONAL CONSEQUENCE, flagged deliberately: if Atum deploys modules on a customer's
-    ///      behalf, that flow now requires the customer's PaymentRails owner to be the caller, or
-    ///      an explicit deployer allowlist instead of this check. Raised with the module owner.
-    ///
-    ///      THIS IS AN AUTHORISATION CHECK, NOT A TYPE CHECK. It asserts who may write to the
-    ///      registry. It asserts nothing about what `paymentRails` is: any contract returning the
-    ///      caller's address from `owner()` satisfies it, PaymentRails or not. That is by design,
-    ///      and adding a type probe would make it worse rather than better:
-    ///
-    ///      * The check bounds the damage by itself. `owner()` must return `msg.sender`, so a
-    ///        caller can only register against a contract that names them -- they cannot write
-    ///        into another party's listing, which is the whole of what L-01 closed. What remains
-    ///        is entries under addresses they already control: registry noise, on top of the
-    ///        unbounded `_deployedModules` growth documented above.
-    ///      * The factory is not a trust root in any case. `new AtumModule(permit2, anyRails,
-    ///        attacker, attacker)` bypasses it entirely, so no check here can establish a property
-    ///        about modules in general.
-    ///      * Every probe available to us -- ERC-165, calling `getTokenConfig`, any marker
-    ///        function -- is a shape check and is equally forgeable by the contract being probed.
-    ///        Adding one would turn an informational registry into one that LOOKS authoritative
-    ///        and is not. Compare `PaymentRails.configureToken`, which probes
-    ///        `IActionModule.moduleType()` in a try/catch: also a sanity check, also not proof.
-    ///
-    ///      Consumers must verify a module's `owner`/`keeper`/`paymentRails` wiring directly.
+    ///      behalf, that flow now requires the customer's PaymentRails owner to be the caller.
+    ///      The module registry remains informational. `new AtumModule(...)` bypasses it, so
+    ///      consumers must still verify a module's `owner`/`keeper`/`paymentRails` wiring directly.
     function _checkPaymentRailsOwner(address paymentRails) private view {
         if (paymentRails.code.length == 0) {
             revert Errors.AtumModuleFactory_PaymentRailsNotContract(paymentRails);
+        }
+        if (!paymentRailsFactory.isDeployedInstance(paymentRails)) {
+            revert Errors.AtumModuleFactory_UnknownPaymentRails(paymentRails);
         }
         address railsOwner = Ownable(paymentRails).owner();
         if (msg.sender != railsOwner) {
