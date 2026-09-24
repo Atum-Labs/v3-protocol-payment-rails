@@ -5,6 +5,7 @@ import { Test } from "forge-std/src/Test.sol";
 import { AtumModuleFactory } from "../../../../../../src/modules/contrib/bridges/AtumModuleFactory.sol";
 
 import { MockPermit2 } from "../../../../../shared/mocks/atum/MockPermit2.sol";
+import { MockPaymentRailsFactory } from "../../../../../shared/mocks/MockPaymentRailsFactory.sol";
 import { PaymentRails } from "../../../../../../src/core/PaymentRails.sol";
 
 /// @dev Base test contract for AtumModuleFactory unit tests.
@@ -30,6 +31,7 @@ abstract contract AtumModuleFactoryBase is Test {
 
     AtumModuleFactory internal factory;
     MockPermit2 internal permit2;
+    MockPaymentRailsFactory internal railsFactory;
 
     address internal owner;
     address internal paymentRails;
@@ -59,7 +61,14 @@ abstract contract AtumModuleFactoryBase is Test {
         foreignRailsOwner = makeAddr("foreignRailsOwner");
         foreignPaymentRails = address(new PaymentRails(foreignRailsOwner));
 
+        // Creation now requires the rails to be on PaymentRailsFactory's deployment list. The
+        // mock stands in for that list; the production factory is what makes membership unforgeable.
+        railsFactory = new MockPaymentRailsFactory();
+        railsFactory.register(paymentRails);
+        railsFactory.register(otherPaymentRails);
+        railsFactory.register(foreignPaymentRails);
+
         permit2 = new MockPermit2(PERMIT2_DOMAIN_SEPARATOR);
-        factory = new AtumModuleFactory(address(permit2));
+        factory = new AtumModuleFactory(address(permit2), railsFactory);
     }
 }

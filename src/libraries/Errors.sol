@@ -178,6 +178,13 @@ library Errors {
     /// @param permit2 The address supplied as Permit2.
     error AtumModuleFactory_Permit2NotContract(address permit2);
 
+    /// @notice Thrown when the factory is constructed with a zero PaymentRailsFactory address.
+    error AtumModuleFactory_ZeroPaymentRailsFactory();
+
+    /// @notice Thrown when the factory is constructed with a PaymentRailsFactory address that has no code.
+    /// @param paymentRailsFactory The address supplied as the PaymentRailsFactory.
+    error AtumModuleFactory_PaymentRailsFactoryNotContract(address paymentRailsFactory);
+
     /// @notice Thrown when a module is created with a zero owner address.
     error AtumModuleFactory_ZeroOwner();
 
@@ -192,7 +199,9 @@ library Errors {
     ///      naming a victim's PaymentRails and have it recorded against them in the registry.
     error AtumModuleFactory_NotPaymentRailsOwner(address caller, address paymentRailsOwner);
 
-    /// @notice Thrown when the supplied PaymentRails address has no code.
-    /// @dev Reading `owner()` off an EOA would revert opaquely; fail with a named error instead.
-    error AtumModuleFactory_PaymentRailsNotContract(address paymentRails);
+    /// @notice Thrown when `paymentRails` was not deployed by the configured PaymentRailsFactory.
+    /// @dev An EOA, a lookalike that copies `owner()`, and a PaymentRails deployed outside the
+    ///      factory all fail here. Membership is owner-gated on that factory, so copying function
+    ///      names is not enough to get onto the list.
+    error AtumModuleFactory_UnknownPaymentRails(address paymentRails);
 }

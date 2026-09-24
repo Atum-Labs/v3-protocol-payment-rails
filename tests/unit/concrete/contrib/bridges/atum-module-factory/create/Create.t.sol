@@ -4,7 +4,14 @@ pragma solidity ^0.8.29;
 import { AtumModuleFactoryBase } from "../AtumModuleFactoryBase.t.sol";
 import { AtumModule } from "../../../../../../../src/modules/contrib/bridges/AtumModule.sol";
 import { Errors } from "../../../../../../../src/libraries/Errors.sol";
+import { PaymentRails } from "../../../../../../../src/core/PaymentRails.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { Vm } from "forge-std/src/Vm.sol";
+
+/// @dev Copies `owner()` and nothing else. Not on the PaymentRailsFactory list.
+contract OwnerReturningLookalike is Ownable {
+    constructor(address initialOwner) Ownable(initialOwner) { }
+}
 
 contract Create_AtumModuleFactory_Test is AtumModuleFactoryBase {
     function test_RevertWhen_OwnerIsZeroAddress() external {
@@ -149,10 +156,27 @@ contract Create_AtumModuleFactory_Test is AtumModuleFactoryBase {
         assertEq(factory.getModulesForPaymentRails(foreignPaymentRails).length, 1);
     }
 
-    /// Reading `owner()` off an EOA would revert opaquely inside the call; fail by name instead.
+    /// An address with no code is not on the factory list. The old code-length check is gone;
+    /// membership covers it.
     function test_Create_RevertsWhenPaymentRailsHasNoCode() external {
         address eoa = makeAddr("notAContract");
-        vm.expectRevert(abi.encodeWithSelector(Errors.AtumModuleFactory_PaymentRailsNotContract.selector, eoa));
+        vm.expectRevert(abi.encodeWithSelector(Errors.AtumModuleFactory_UnknownPaymentRails.selector, eoa));
         factory.create(owner, eoa, keeper);
+    }
+
+    /// A contract that returns the caller from `owner()` still fails unless PaymentRailsFactory
+    /// deployed it. Copying the function is not enough to get onto that list.
+    function test_Create_RevertsWhenPaymentRailsIsALookalike() external {
+        address lookalike = address(new OwnerReturningLookalike(address(this)));
+        vm.expectRevert(abi.encodeWithSelector(Errors.AtumModuleFactory_UnknownPaymentRails.selector, lookalike));
+        factory.create(owner, lookalike, keeper);
+    }
+
+    /// A real PaymentRails deployed outside the factory is rejected. That is the cost of trusting
+    /// the list.
+    function test_Create_RevertsWhenPaymentRailsWasNotDeployedByTheFactory() external {
+        address direct = address(new PaymentRails(address(this)));
+        vm.expectRevert(abi.encodeWithSelector(Errors.AtumModuleFactory_UnknownPaymentRails.selector, direct));
+        factory.create(owner, direct, keeper);
     }
 }

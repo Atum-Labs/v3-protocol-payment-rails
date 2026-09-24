@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.29;
 
+import { IPaymentRailsFactory } from "./IPaymentRailsFactory.sol";
+
 /// @title IAtumModuleFactory
 /// @notice Interface for the factory that deploys and tracks AtumModule instances.
 /// @dev AtumModule is stateful (owns pulled source balances, immutable `paymentRails` and `permit2`),
@@ -37,7 +39,7 @@ interface IAtumModuleFactory {
     /// - `owner` must not be `address(0)`
     /// - `paymentRails` must not be `address(0)`
     /// - `keeper` must not be `address(0)`
-    /// - `paymentRails` must be a contract
+    /// - `paymentRails` must be an instance deployed by {paymentRailsFactory}
     /// - the caller must be `Ownable(paymentRails).owner()` (Certora L-01)
     ///
     /// @param owner The initial owner of the AtumModule (can rotate the keeper and pause).
@@ -54,7 +56,7 @@ interface IAtumModuleFactory {
     /// - `owner` must not be `address(0)`
     /// - `paymentRails` must not be `address(0)`
     /// - `keeper` must not be `address(0)`
-    /// - `paymentRails` must be a contract
+    /// - `paymentRails` must be an instance deployed by {paymentRailsFactory}
     /// - the caller must be `Ownable(paymentRails).owner()` (Certora L-01)
     /// - The `(msg.sender, owner, paymentRails, keeper, salt)` combination must not have been used
     ///   before. The caller is part of the key because the CREATE2 salt is bound to it
@@ -81,6 +83,10 @@ interface IAtumModuleFactory {
     /// @notice The Permit2 contract every deployed module is wired to.
     /// @return The Permit2 address.
     function permit2() external view returns (address);
+
+    /// @notice PaymentRailsFactory whose deployment list is the record of real PaymentRails.
+    /// @return The PaymentRailsFactory address.
+    function paymentRailsFactory() external view returns (IPaymentRailsFactory);
 
     /// @notice Predict the address of a deterministic deployment.
     /// @param deployer The address that will call {createDeterministic}. The salt is bound to it
