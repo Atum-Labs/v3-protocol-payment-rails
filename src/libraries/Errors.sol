@@ -199,9 +199,14 @@ library Errors {
     ///      naming a victim's PaymentRails and have it recorded against them in the registry.
     error AtumModuleFactory_NotPaymentRailsOwner(address caller, address paymentRailsOwner);
 
+    /// @notice Thrown when the supplied PaymentRails address has no code.
+    /// @dev Reading `owner()` off an EOA would revert opaquely; fail with a named error instead.
+    error AtumModuleFactory_PaymentRailsNotContract(address paymentRails);
+
     /// @notice Thrown when `paymentRails` was not deployed by the configured PaymentRailsFactory.
-    /// @dev An EOA, a lookalike that copies `owner()`, and a PaymentRails deployed outside the
-    ///      factory all fail here. Membership is owner-gated on that factory, so copying function
-    ///      names is not enough to get onto the list.
+    /// @dev A lookalike that copies `owner()`, and a PaymentRails deployed outside the factory,
+    ///      fail here. An address with no code fails earlier, at `PaymentRailsNotContract`.
+    ///      Membership is owner-gated on that factory, so copying function names is not enough
+    ///      to get onto the list.
     error AtumModuleFactory_UnknownPaymentRails(address paymentRails);
 }

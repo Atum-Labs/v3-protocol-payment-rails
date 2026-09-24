@@ -185,13 +185,16 @@ contract AtumModuleFactory is IAtumModuleFactory {
     ///      still fail `isDeployedInstance`. Once that passes, the code at `paymentRails` is a
     ///      real PaymentRails and its `owner()` answer can be trusted. A PaymentRails deployed
     ///      outside the factory is rejected; that is the cost of trusting the list. The code-length
-    ///      check is unnecessary: an address with no code is not on the list.
+    ///      check stays in front of it, so an EOA fails by name before the registry read.
     ///
     ///      OPERATIONAL CONSEQUENCE, flagged deliberately: if Atum deploys modules on a customer's
     ///      behalf, that flow now requires the customer's PaymentRails owner to be the caller.
     ///      The module registry remains informational. `new AtumModule(...)` bypasses it, so
     ///      consumers must still verify a module's `owner`/`keeper`/`paymentRails` wiring directly.
     function _checkPaymentRailsOwner(address paymentRails) private view {
+        if (paymentRails.code.length == 0) {
+            revert Errors.AtumModuleFactory_PaymentRailsNotContract(paymentRails);
+        }
         if (!paymentRailsFactory.isDeployedInstance(paymentRails)) {
             revert Errors.AtumModuleFactory_UnknownPaymentRails(paymentRails);
         }

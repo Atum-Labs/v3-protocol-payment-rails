@@ -156,11 +156,10 @@ contract Create_AtumModuleFactory_Test is AtumModuleFactoryBase {
         assertEq(factory.getModulesForPaymentRails(foreignPaymentRails).length, 1);
     }
 
-    /// An address with no code is not on the factory list. The old code-length check is gone;
-    /// membership covers it.
+    /// An address with no code fails the code-length check, before the factory list is consulted.
     function test_Create_RevertsWhenPaymentRailsHasNoCode() external {
         address eoa = makeAddr("notAContract");
-        vm.expectRevert(abi.encodeWithSelector(Errors.AtumModuleFactory_UnknownPaymentRails.selector, eoa));
+        vm.expectRevert(abi.encodeWithSelector(Errors.AtumModuleFactory_PaymentRailsNotContract.selector, eoa));
         factory.create(owner, eoa, keeper);
     }
 

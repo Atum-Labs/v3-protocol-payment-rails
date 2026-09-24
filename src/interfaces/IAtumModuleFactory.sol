@@ -39,6 +39,7 @@ interface IAtumModuleFactory {
     /// - `owner` must not be `address(0)`
     /// - `paymentRails` must not be `address(0)`
     /// - `keeper` must not be `address(0)`
+    /// - `paymentRails` must be a contract
     /// - `paymentRails` must be an instance deployed by {paymentRailsFactory}
     /// - the caller must be `Ownable(paymentRails).owner()` (Certora L-01)
     ///
@@ -56,6 +57,7 @@ interface IAtumModuleFactory {
     /// - `owner` must not be `address(0)`
     /// - `paymentRails` must not be `address(0)`
     /// - `keeper` must not be `address(0)`
+    /// - `paymentRails` must be a contract
     /// - `paymentRails` must be an instance deployed by {paymentRailsFactory}
     /// - the caller must be `Ownable(paymentRails).owner()` (Certora L-01)
     /// - The `(msg.sender, owner, paymentRails, keeper, salt)` combination must not have been used
