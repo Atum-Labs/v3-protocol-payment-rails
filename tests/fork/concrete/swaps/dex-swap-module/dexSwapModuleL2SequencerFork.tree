@@ -1,0 +1,15 @@
+DexSwapModuleL2SequencerFork (Base mainnet)
+├── when deployed against Base's real SwapRouter02 and sequencer uptime feed
+│   ├── it should set the router
+│   ├── it should set the sequencer uptime feed
+│   └── it should set the sequencer grace period
+├── when reading the live sequencer feed
+│   └── it should report startedAt and updatedAt far apart
+├── when the grace period sits between the two timestamps
+│   └── it should measure the grace period from startedAt
+├── when the grace period has not elapsed
+│   ├── it should reject the swap with oracle price unavailable
+│   ├── it should estimate zero output
+│   └── it should not move any tokens through executeAction
+└── when the sequencer is up past the grace period
+    └── it should swap through the real Uniswap V3 pool above the oracle floor

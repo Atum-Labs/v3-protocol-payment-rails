@@ -57,6 +57,12 @@ CowSwapModule_Execute
 │   └── it should succeed
 ├── when L2 sequencer feed reverts
 │   └── it should return failed result with oracle price unavailable
+├── when L2 sequencer startedAt and updatedAt diverge
+│   └── it should measure the grace period from startedAt
+├── when L2 sequencer round is uninitialized (startedAt == 0)
+│   └── it should return failed result with oracle price unavailable
+├── when L2 sequencer reports a timestamp ahead of block.timestamp
+│   └── it should return failed result with oracle price unavailable
 ├── when no-return sell token (e.g. USDT)
 │   └── it should succeed and store order metadata
 ├── when fee-on-transfer sell token

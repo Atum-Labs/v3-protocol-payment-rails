@@ -158,15 +158,11 @@ contract CowSwapModuleFactoryL2SequencerFork_Test is Test {
             IChainlinkAggregatorV3(SEQUENCER_UPTIME_FEED).latestRoundData();
         assertEq(answer, 0, "fork block must have the sequencer reporting up");
 
-        // The module binds tuple position 4 to the variable it calls `startedAt`
-        // (CowSwapModule.sol:415), but position 4 is `updatedAt` — position 3 is the real
-        // `startedAt`. At this fork block the two are 80.76 days and 68.06 hours old
-        // respectively, so they are not interchangeable. This warp targets the value the module
-        // actually reads, so the guard is genuinely exercised. Once the tuple position is
-        // corrected this must warp relative to `startedAt` instead, and the assertion below will
-        // fail until it is — which is the intended signal.
+        // The two timestamps are weeks apart on this feed, so a test that measured from the wrong
+        // one would still pass here. Assert they diverge, then measure from `startedAt` — the value
+        // the guard is specified against.
         assertTrue(updatedAt > startedAt, "positions 3 and 4 must be distinct on the live feed");
-        vm.warp(updatedAt + 1);
+        vm.warp(startedAt + 1);
 
         (bool isValid, string memory reason) = module.validate(WETH, WETH_SELL_AMOUNT, _swapParams());
 
