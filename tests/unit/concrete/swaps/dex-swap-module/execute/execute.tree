@@ -63,6 +63,12 @@ DexSwapModule::execute
 │   └── it should succeed
 ├── when L2 sequencer feed reverts
 │   └── it should return failed result with oracle price unavailable
+├── when L2 sequencer startedAt and updatedAt diverge
+│   └── it should measure the grace period from startedAt
+├── when L2 sequencer round is uninitialized (startedAt == 0)
+│   └── it should return failed result with oracle price unavailable
+├── when L2 sequencer reports a timestamp ahead of block.timestamp
+│   └── it should return failed result with oracle price unavailable
 ├── when router re-enters execute during swap callback
 │   ├── it should revert the reentrant call with ReentrancyGuardReentrantCall
 │   ├── it should complete the original swap successfully

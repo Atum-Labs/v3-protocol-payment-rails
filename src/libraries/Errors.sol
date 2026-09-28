@@ -130,6 +130,18 @@ library Errors {
     /// @param sequencerUptimeFeed The EOA address that was rejected.
     error CowSwapModuleFactory_SequencerFeedNotContract(address sequencerUptimeFeed);
 
+    /// @notice Thrown when the sequencer grace period is zero or implausibly large on the L2
+    /// profile. Zero would reduce every deployed module's grace check to `uint256 < 0`, which is
+    /// never true, silently disabling the guard fleet-wide.
+    /// @param sequencerGracePeriod The value that was rejected.
+    error CowSwapModuleFactory_InvalidGracePeriod(uint256 sequencerGracePeriod);
+
+    /// @notice Thrown when a non-zero sequencer grace period is paired with no uptime feed. The
+    /// grace period is measured from the feed's `startedAt`, so without a feed it is dead config
+    /// that still reads as protection through `sequencerGracePeriod()`.
+    /// @param sequencerGracePeriod The value that was rejected.
+    error CowSwapModuleFactory_GracePeriodWithoutFeed(uint256 sequencerGracePeriod);
+
     /// @notice Thrown when attempting to deploy a CowSwapModule with owner set to the zero address.
     error CowSwapModuleFactory_ZeroOwner();
 
@@ -140,14 +152,8 @@ library Errors {
     /// @param paymentRails The address that was rejected.
     error CowSwapModuleFactory_PaymentRailsNotContract(address paymentRails);
 
-    /// @notice Thrown when the target PaymentRails does not expose a decodable `owner()`.
-    /// @param paymentRails The address whose ownership could not be resolved.
-    error CowSwapModuleFactory_OwnerLookupFailed(address paymentRails);
-
-    /// @notice Thrown when the caller is not the current owner of the target PaymentRails.
-    /// @param caller The unauthorized caller.
-    /// @param paymentRailsOwner The current owner of the target PaymentRails.
-    error CowSwapModuleFactory_CallerNotPaymentRailsOwner(address caller, address paymentRailsOwner);
+    /// @notice Thrown when renouncing ownership of the factory is attempted.
+    error CowSwapModuleFactory_OwnershipCannotBeRenounced();
 
     /*//////////////////////////////////////////////////////////////////////////
                         CCTP BRIDGE MODULE ERRORS

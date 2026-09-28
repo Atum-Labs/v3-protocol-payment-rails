@@ -31,22 +31,18 @@ contract Registry_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
     //////////////////////////////////////////////////////////////////////////*/
 
     function test_GivenModules_IsDeployedModule_ShouldReturnTrueForDeployed() external {
-        vm.prank(railsOwner);
         address module = factory.create(owner, paymentRails);
         assertTrue(factory.isDeployedModule(module));
     }
 
     function test_GivenModules_IsDeployedModule_ShouldReturnFalseForNonDeployed() external {
-        vm.prank(railsOwner);
         factory.create(owner, paymentRails);
         assertFalse(factory.isDeployedModule(address(0xdead)));
     }
 
     function test_GivenModules_GetDeployedModules_ShouldReturnCorrectArray() external {
-        vm.startPrank(railsOwner);
         address module1 = factory.create(owner, paymentRails);
         address module2 = factory.create(owner, paymentRails);
-        vm.stopPrank();
 
         address[] memory modules = factory.getDeployedModules();
         assertEq(modules.length, 2);
@@ -55,11 +51,9 @@ contract Registry_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
     }
 
     function test_GivenModules_GetModuleCount_ShouldReturnCorrectCount() external {
-        vm.startPrank(railsOwner);
         factory.create(owner, paymentRails);
         factory.create(owner, paymentRails);
         factory.create(owner, paymentRails);
-        vm.stopPrank();
         assertEq(factory.getModuleCount(), 3);
     }
 
@@ -67,10 +61,7 @@ contract Registry_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
         address otherRailsOwner = makeAddr("otherRailsOwner");
         address otherPaymentRails = deployPaymentRails(otherRailsOwner);
 
-        vm.prank(railsOwner);
         address module1 = factory.create(owner, paymentRails);
-
-        vm.prank(otherRailsOwner);
         address module2 = factory.create(owner, otherPaymentRails);
 
         address[] memory railsModules = factory.getModulesForPaymentRails(paymentRails);
@@ -87,10 +78,8 @@ contract Registry_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
     //////////////////////////////////////////////////////////////////////////*/
 
     function test_GivenMixedDeployments_ShouldTrackBothInSameRegistry() external {
-        vm.startPrank(railsOwner);
         address createModule = factory.create(owner, paymentRails);
         address create2Module = factory.createDeterministic(owner, paymentRails, DEFAULT_SALT);
-        vm.stopPrank();
 
         assertTrue(factory.isDeployedModule(createModule));
         assertTrue(factory.isDeployedModule(create2Module));
@@ -105,31 +94,29 @@ contract Registry_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
     }
 
     /*//////////////////////////////////////////////////////////////////////////
-                    GIVEN AN ATTEMPT TO POISON ANOTHER INSTANCE
+                    GIVEN A NON-OWNER ATTEMPTS TO REGISTER
     //////////////////////////////////////////////////////////////////////////*/
 
-    /// @dev The registry is only trustworthy if a PaymentRails lookup lists exactly what that
-    /// instance's owner authorized. An attacker who owns their own PaymentRails must not be able
-    /// to add an entry under someone else's.
-    function test_GivenPoisoningAttempt_VictimLookupStaysEmpty() external {
+    /// @dev Owning a PaymentRails confers no right to register a module.
+    function test_GivenNonOwnerAttempt_ShouldRegisterNothingEvenIfCallerOwnsARails() external {
         address attacker = makeAddr("attacker");
         address attackerRails = deployPaymentRails(attacker);
 
-        // The attacker can freely deploy under their own PaymentRails.
-        vm.prank(attacker);
-        address attackerModule = factory.create(attacker, attackerRails);
-        assertTrue(factory.isDeployedModule(attackerModule));
-
-        // But not under the victim's.
-        vm.prank(attacker);
+        vm.startPrank(attacker);
+        try factory.create(attacker, attackerRails) returns (address) {
+            fail();
+        } catch { }
         try factory.create(attacker, paymentRails) returns (address) {
             fail();
         } catch { }
+        vm.stopPrank();
 
+        assertEq(factory.getModuleCount(), 0);
+        assertEq(factory.getModulesForPaymentRails(attackerRails).length, 0);
         assertEq(factory.getModulesForPaymentRails(paymentRails).length, 0);
     }
 
-    function test_GivenPoisoningAttempt_ShouldOnlyListOwnerAuthorizedModules() external {
+    function test_GivenNonOwnerAttempt_ShouldOnlyListFactoryOwnerModules() external {
         address attacker = makeAddr("attacker");
 
         vm.prank(attacker);
@@ -137,7 +124,6 @@ contract Registry_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
             fail();
         } catch { }
 
-        vm.prank(railsOwner);
         address legitimateModule = factory.create(owner, paymentRails);
 
         address[] memory modules = factory.getModulesForPaymentRails(paymentRails);

@@ -2,16 +2,15 @@ CowSwapModuleFactory_Fork
 ├── when the factory is deployed against the real GPv2Settlement
 │   ├── it should deploy successfully
 │   ├── it should reject an EOA settlement address
-│   └── when create is called by the PaymentRails owner
+│   └── when create is called by the factory owner
 │       ├── it should wire the module to the real settlement domain separator
 │       ├── it should wire the module to the real vault relayer
 │       ├── it should register the module in the factory
+│       ├── it should deploy a module for a PaymentRails the factory owner does not own
 │       └── when the module is configured on a PaymentRails
 │           └── it should execute a real USDC order end-to-end
-├── when create is called against a real PaymentRails by a non-owner
-│   ├── it should revert with CowSwapModuleFactory_CallerNotPaymentRailsOwner
-│   └── it should leave the victim PaymentRails lookup empty
-├── when create targets a real contract that is not Ownable
-│   └── it should revert with CowSwapModuleFactory_OwnerLookupFailed
+├── when create is called by a non-owner against a real PaymentRails
+│   ├── it should revert with OwnableUnauthorizedAccount
+│   └── it should leave the PaymentRails lookup empty
 └── when createDeterministic is called on the fork
     └── it should deploy to the predicted address

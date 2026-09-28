@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.29;
 
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { Ownable2Step } from "@openzeppelin/contracts/access/Ownable2Step.sol";
+
 import { ICowSwapModuleFactory } from "../../interfaces/ICowSwapModuleFactory.sol";
 import { CowSwapModule } from "./CowSwapModule.sol";
 import { Errors } from "../../libraries/Errors.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title CowSwapModuleFactory
 /// @author Credit Cooperative
 /// @notice See the documentation in {ICowSwapModuleFactory}.
-contract CowSwapModuleFactory is ICowSwapModuleFactory {
+/// @dev Creation is owner-gated so the registry only lists modules this organization deployed. The
+/// factory cannot verify `paymentRails` is a genuine PaymentRails; the owner is trusted to pass it.
+contract CowSwapModuleFactory is ICowSwapModuleFactory, Ownable2Step {
     /*//////////////////////////////////////////////////////////////////////////
                                 IMMUTABLE STATE
     //////////////////////////////////////////////////////////////////////////*/
@@ -22,6 +26,9 @@ contract CowSwapModuleFactory is ICowSwapModuleFactory {
 
     /// @inheritdoc ICowSwapModuleFactory
     uint256 public immutable override sequencerGracePeriod;
+
+    /// @dev Upper bound on `sequencerGracePeriod`; catches a units slip. Chainlink's reference uses 3600.
+    uint256 private constant MAX_SEQUENCER_GRACE_PERIOD = 1 days;
 
     /*//////////////////////////////////////////////////////////////////////////
                                     STORAGE
@@ -42,10 +49,19 @@ contract CowSwapModuleFactory is ICowSwapModuleFactory {
 
     /// @dev Chain-specific configuration is fixed at factory deployment so the registry
     /// guarantees the wiring of every module it lists, not just the bytecode.
+    /// @param initialOwner Address allowed to create modules. Taken as an argument, not
+    /// `msg.sender`, so the deployer never holds the role and no handover is required.
     /// @param _cowSettlement GPv2Settlement contract address.
     /// @param _sequencerUptimeFeed Chainlink L2 sequencer uptime feed; address(0) on L1.
     /// @param _sequencerGracePeriod Seconds after sequencer recovery before trusting oracles.
-    constructor(address _cowSettlement, address _sequencerUptimeFeed, uint256 _sequencerGracePeriod) {
+    constructor(
+        address initialOwner,
+        address _cowSettlement,
+        address _sequencerUptimeFeed,
+        uint256 _sequencerGracePeriod
+    )
+        Ownable(initialOwner)
+    {
         if (_cowSettlement == address(0)) {
             revert Errors.CowSwapModuleFactory_ZeroCowSettlement();
         }
@@ -61,6 +77,16 @@ contract CowSwapModuleFactory is ICowSwapModuleFactory {
         if (_sequencerUptimeFeed != address(0) && _sequencerUptimeFeed.code.length == 0) {
             revert Errors.CowSwapModuleFactory_SequencerFeedNotContract(_sequencerUptimeFeed);
         }
+        // The feed and the grace period are two halves of one guard, so they must agree. A zero
+        // grace period makes the module's check `block.timestamp - startedAt < 0` — never true for
+        // uint256 — deleting the guard rather than shortening it.
+        if (_sequencerUptimeFeed == address(0)) {
+            if (_sequencerGracePeriod != 0) {
+                revert Errors.CowSwapModuleFactory_GracePeriodWithoutFeed(_sequencerGracePeriod);
+            }
+        } else if (_sequencerGracePeriod == 0 || _sequencerGracePeriod > MAX_SEQUENCER_GRACE_PERIOD) {
+            revert Errors.CowSwapModuleFactory_InvalidGracePeriod(_sequencerGracePeriod);
+        }
 
         cowSettlement = _cowSettlement;
         sequencerUptimeFeed = _sequencerUptimeFeed;
@@ -68,11 +94,21 @@ contract CowSwapModuleFactory is ICowSwapModuleFactory {
     }
 
     /*//////////////////////////////////////////////////////////////////////////
+                                    OWNERSHIP
+    //////////////////////////////////////////////////////////////////////////*/
+
+    /// @dev Disables renounceOwnership(): renouncing would leave both creation paths permanently
+    /// uncallable, bricking the factory.
+    function renounceOwnership() public pure override {
+        revert Errors.CowSwapModuleFactory_OwnershipCannotBeRenounced();
+    }
+
+    /*//////////////////////////////////////////////////////////////////////////
                             DEPLOYMENT FUNCTIONS
     //////////////////////////////////////////////////////////////////////////*/
 
     /// @inheritdoc ICowSwapModuleFactory
-    function create(address owner, address paymentRails) external returns (address module) {
+    function create(address owner, address paymentRails) external onlyOwner returns (address module) {
         // Checks: Validate the per-instance parameters.
         _checkCreateParams(owner, paymentRails);
 
@@ -85,7 +121,15 @@ contract CowSwapModuleFactory is ICowSwapModuleFactory {
     }
 
     /// @inheritdoc ICowSwapModuleFactory
-    function createDeterministic(address owner, address paymentRails, bytes32 salt) external returns (address module) {
+    function createDeterministic(
+        address owner,
+        address paymentRails,
+        bytes32 salt
+    )
+        external
+        onlyOwner
+        returns (address module)
+    {
         // Checks: Validate the per-instance parameters.
         _checkCreateParams(owner, paymentRails);
 
@@ -149,6 +193,8 @@ contract CowSwapModuleFactory is ICowSwapModuleFactory {
     //////////////////////////////////////////////////////////////////////////*/
 
     /// @dev Validates the per-instance deployment parameters shared by both create functions.
+    /// The code-length check is a typo guard, not authentication: a 7702-delegated EOA passes it.
+    /// Verify `module.paymentRails()` and `module.owner()` before wiring a module.
     function _checkCreateParams(address owner, address paymentRails) private view {
         // Zero owner would brick the module: renounceOwnership is disabled and no one could cancel orders.
         if (owner == address(0)) {
@@ -158,47 +204,9 @@ contract CowSwapModuleFactory is ICowSwapModuleFactory {
         if (paymentRails == address(0)) {
             revert Errors.CowSwapModuleFactory_ZeroPaymentRails();
         }
-
-        _checkPaymentRailsOwner(paymentRails);
-    }
-
-    /// @dev Reverts unless the caller is the current owner of `paymentRails`.
-    ///
-    /// The registry indexes modules by the PaymentRails they are wired to, and integrators read
-    /// {getModulesForPaymentRails} to discover "the" module for an instance. Without this check any
-    /// address could call {create} with a victim's PaymentRails and an attacker-controlled `owner`,
-    /// planting an attacker-owned module in the victim's registry entry — the victim would then see
-    /// a module that is factory-deployed, correctly wired, and reported under their own PaymentRails,
-    /// while the attacker holds `cancelOrder` rights over it. Requiring the PaymentRails owner to be
-    /// the caller makes every registry entry an assertion that the instance's own owner authorized it.
-    ///
-    /// The owner is read at call time, so an Ownable2Step transfer moves the right to register modules
-    /// along with ownership: only the accepted (current) owner qualifies, never the pending one.
-    function _checkPaymentRailsOwner(address paymentRails) private view {
-        // An EOA cannot own anything, and its staticcall would succeed with empty returndata.
+        // An EOA can never call execute(), so a module wired to one would be permanently inert.
         if (paymentRails.code.length == 0) {
             revert Errors.CowSwapModuleFactory_PaymentRailsNotContract(paymentRails);
-        }
-
-        // Low-level call rather than `try`: a contract that returns malformed data for `owner()`
-        // must surface as an explicit lookup failure, not as an uncatchable decoding revert.
-        (bool success, bytes memory returndata) =
-            paymentRails.staticcall(abi.encodeWithSelector(Ownable.owner.selector));
-        if (!success || returndata.length != 32) {
-            revert Errors.CowSwapModuleFactory_OwnerLookupFailed(paymentRails);
-        }
-
-        // Decode as a raw word, not as `address`: a 32-byte answer is not necessarily canonical ABI
-        // padding, and `abi.decode(..., (address))` reverts on dirty upper bits with empty revert data
-        // — defeating the explicit lookup failure promised above. Validate the padding ourselves.
-        bytes32 ownerWord = abi.decode(returndata, (bytes32));
-        if (uint256(ownerWord) > type(uint160).max) {
-            revert Errors.CowSwapModuleFactory_OwnerLookupFailed(paymentRails);
-        }
-
-        address paymentRailsOwner = address(uint160(uint256(ownerWord)));
-        if (msg.sender != paymentRailsOwner) {
-            revert Errors.CowSwapModuleFactory_CallerNotPaymentRailsOwner(msg.sender, paymentRailsOwner);
         }
     }
 

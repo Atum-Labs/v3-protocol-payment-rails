@@ -1,93 +1,36 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+
 import { CowSwapModuleFactoryBase } from "../CowSwapModuleFactoryBase.t.sol";
 import { CowSwapModule } from "../../../../../../src/modules/swaps/CowSwapModule.sol";
 import { PaymentRails } from "../../../../../../src/core/PaymentRails.sol";
 import { Errors } from "../../../../../../src/libraries/Errors.sol";
 
-import {
-    MockDirtyOwnerTarget,
-    MockMalformedOwnerTarget,
-    MockOwnerlessTarget
-} from "../../../../../shared/mocks/MockOwnerlessTarget.sol";
-
 contract Create_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
-    function test_RevertWhen_OwnerIsZeroAddress() external {
-        vm.prank(railsOwner);
-        vm.expectRevert(Errors.CowSwapModuleFactory_ZeroOwner.selector);
-        factory.create(address(0), paymentRails);
-    }
-
-    function test_RevertWhen_PaymentRailsIsZeroAddress() external {
-        vm.prank(railsOwner);
-        vm.expectRevert(Errors.CowSwapModuleFactory_ZeroPaymentRails.selector);
-        factory.create(owner, address(0));
-    }
-
     /*//////////////////////////////////////////////////////////////////////////
-                            PAYMENT RAILS AUTHENTICATION
+                            CALLER IS NOT THE FACTORY OWNER
     //////////////////////////////////////////////////////////////////////////*/
 
-    function test_RevertWhen_PaymentRailsIsEOA() external {
-        address eoa = makeAddr("eoaRails");
-        vm.prank(eoa);
-        vm.expectRevert(abi.encodeWithSelector(Errors.CowSwapModuleFactory_PaymentRailsNotContract.selector, eoa));
-        factory.create(owner, eoa);
-    }
-
-    function test_RevertWhen_PaymentRailsDoesNotExposeOwner() external {
-        address target = address(new MockOwnerlessTarget());
-        vm.expectRevert(abi.encodeWithSelector(Errors.CowSwapModuleFactory_OwnerLookupFailed.selector, target));
-        factory.create(owner, target);
-    }
-
-    function test_RevertWhen_PaymentRailsReturnsMalformedOwner() external {
-        address target = address(new MockMalformedOwnerTarget());
-        vm.expectRevert(abi.encodeWithSelector(Errors.CowSwapModuleFactory_OwnerLookupFailed.selector, target));
-        factory.create(owner, target);
-    }
-
-    /// @dev A 32-byte answer is not necessarily canonical ABI padding. Decoding it straight to
-    /// `address` would revert inside the ABI decoder with empty revert data, hiding the failure the
-    /// factory documents; the owner word must be validated so the lookup error still surfaces.
-    function test_RevertWhen_PaymentRailsOwnerWordHasDirtyUpperBits() external {
-        address target = address(new MockDirtyOwnerTarget());
-        vm.expectRevert(abi.encodeWithSelector(Errors.CowSwapModuleFactory_OwnerLookupFailed.selector, target));
-        factory.create(owner, target);
-    }
-
-    function test_RevertWhen_CallerIsNotPaymentRailsOwner() external {
-        address stranger = makeAddr("stranger");
+    function test_RevertWhen_CallerIsNotFactoryOwner() external {
         vm.prank(stranger);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Errors.CowSwapModuleFactory_CallerNotPaymentRailsOwner.selector, stranger, railsOwner
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
         factory.create(owner, paymentRails);
     }
 
-    /// @dev The exact attack the authentication closes: an attacker calling create() with the victim's
-    /// PaymentRails and an attacker-controlled module owner, so the victim's registry entry lists a
-    /// factory-deployed, correctly-wired module that the attacker can cancel orders on.
-    function test_RevertWhen_AttackerPlantsAttackerOwnedModuleUnderVictimRails() external {
-        address attacker = makeAddr("attacker");
+    /// @dev Owning the PaymentRails confers no right to mint a module for it.
+    function test_RevertWhen_CallerIsPaymentRailsOwnerButNotFactoryOwner() external {
+        assertEq(PaymentRails(paymentRails).owner(), railsOwner);
 
-        vm.prank(attacker);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Errors.CowSwapModuleFactory_CallerNotPaymentRailsOwner.selector, attacker, railsOwner
-            )
-        );
-        factory.create(attacker, paymentRails);
+        vm.prank(railsOwner);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, railsOwner));
+        factory.create(railsOwner, paymentRails);
     }
 
-    function test_WhenAttackPrevented_VictimLookupStaysEmpty() external {
-        address attacker = makeAddr("attacker");
-
-        vm.prank(attacker);
-        try factory.create(attacker, paymentRails) returns (address) {
+    function test_WhenUnauthorized_RegistryStaysEmpty() external {
+        vm.prank(stranger);
+        try factory.create(stranger, paymentRails) returns (address) {
             fail();
         } catch { }
 
@@ -95,58 +38,72 @@ contract Create_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
         assertEq(factory.getModuleCount(), 0);
     }
 
-    function test_RevertWhen_CallerIsPendingOwnerOfInFlightTransfer() external {
-        address newOwner = makeAddr("newOwner");
+    /*//////////////////////////////////////////////////////////////////////////
+                                PARAMETER VALIDATION
+    //////////////////////////////////////////////////////////////////////////*/
 
-        vm.prank(railsOwner);
-        PaymentRails(paymentRails).transferOwnership(newOwner);
+    function test_RevertWhen_OwnerIsZeroAddress() external {
+        vm.expectRevert(Errors.CowSwapModuleFactory_ZeroOwner.selector);
+        factory.create(address(0), paymentRails);
+    }
 
-        // Ownable2Step: ownership has not moved until accepted, so the pending owner is still a stranger.
-        vm.prank(newOwner);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Errors.CowSwapModuleFactory_CallerNotPaymentRailsOwner.selector, newOwner, railsOwner
-            )
-        );
-        factory.create(owner, paymentRails);
+    function test_RevertWhen_PaymentRailsIsZeroAddress() external {
+        vm.expectRevert(Errors.CowSwapModuleFactory_ZeroPaymentRails.selector);
+        factory.create(owner, address(0));
+    }
+
+    /// @dev Typo guard, not authentication: an EOA can never call execute().
+    function test_RevertWhen_PaymentRailsHasNoCode() external {
+        address eoa = makeAddr("eoaRails");
+        vm.expectRevert(abi.encodeWithSelector(Errors.CowSwapModuleFactory_PaymentRailsNotContract.selector, eoa));
+        factory.create(owner, eoa);
     }
 
     /*//////////////////////////////////////////////////////////////////////////
-                            CALLER IS THE PAYMENT RAILS OWNER
+                            CALLER IS THE FACTORY OWNER
     //////////////////////////////////////////////////////////////////////////*/
 
-    function test_WhenCallerIsRailsOwner_ShouldDeployContract() external {
-        vm.prank(railsOwner);
+    function test_WhenCallerIsFactoryOwner_ShouldDeployContract() external {
         address module = factory.create(owner, paymentRails);
         assertTrue(module.code.length > 0);
     }
 
-    function test_WhenCallerIsRailsOwner_ShouldSetOwner() external {
-        vm.prank(railsOwner);
+    function test_WhenCallerIsFactoryOwner_ShouldSetOwner() external {
         address module = factory.create(owner, paymentRails);
         assertEq(CowSwapModule(module).owner(), owner);
     }
 
-    /// @dev The PaymentRails owner authorizes the deployment but may hand the module to a different
-    /// operator; authentication constrains who deploys, not who ends up owning the module.
-    function test_WhenCallerIsRailsOwner_ShouldAllowDistinctModuleOwner() external {
+    function test_WhenCallerIsFactoryOwner_ShouldAllowDistinctModuleOwner() external {
         assertTrue(owner != railsOwner);
 
-        vm.prank(railsOwner);
         address module = factory.create(owner, paymentRails);
 
         assertEq(CowSwapModule(module).owner(), owner);
         assertEq(PaymentRails(paymentRails).owner(), railsOwner);
     }
 
-    function test_WhenCallerIsRailsOwner_ShouldWirePaymentRails() external {
-        vm.prank(railsOwner);
+    /// @dev The production flow: cancel rights go straight to the PaymentRails owner.
+    function test_WhenCallerIsFactoryOwner_ShouldAllowRailsOwnerAsModuleOwner() external {
+        address module = factory.create(railsOwner, paymentRails);
+
+        assertEq(CowSwapModule(module).owner(), railsOwner);
+        assertEq(CowSwapModule(module).paymentRails(), paymentRails);
+    }
+
+    function test_WhenCallerIsFactoryOwner_ShouldNotRequireOwningThePaymentRails() external {
+        assertTrue(PaymentRails(paymentRails).owner() != address(this));
+        assertEq(factory.owner(), address(this));
+
+        address module = factory.create(owner, paymentRails);
+        assertTrue(factory.isDeployedModule(module));
+    }
+
+    function test_WhenCallerIsFactoryOwner_ShouldWirePaymentRails() external {
         address module = factory.create(owner, paymentRails);
         assertEq(CowSwapModule(module).paymentRails(), paymentRails);
     }
 
-    function test_WhenCallerIsRailsOwner_ShouldWireChainConfig() external {
-        vm.prank(railsOwner);
+    function test_WhenCallerIsFactoryOwner_ShouldWireChainConfig() external {
         address module = factory.create(owner, paymentRails);
 
         assertEq(CowSwapModule(module).cowSettlement(), address(cowSettlement));
@@ -156,21 +113,18 @@ contract Create_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
         assertEq(CowSwapModule(module).sequencerGracePeriod(), factory.sequencerGracePeriod());
     }
 
-    function test_WhenCallerIsRailsOwner_ShouldRegisterModule() external {
-        vm.prank(railsOwner);
+    function test_WhenCallerIsFactoryOwner_ShouldRegisterModule() external {
         address module = factory.create(owner, paymentRails);
         assertTrue(factory.isDeployedModule(module));
     }
 
-    function test_WhenCallerIsRailsOwner_ShouldIncrementModuleCount() external {
+    function test_WhenCallerIsFactoryOwner_ShouldIncrementModuleCount() external {
         assertEq(factory.getModuleCount(), 0);
-        vm.prank(railsOwner);
         factory.create(owner, paymentRails);
         assertEq(factory.getModuleCount(), 1);
     }
 
-    function test_WhenCallerIsRailsOwner_ShouldRegisterUnderPaymentRailsLookup() external {
-        vm.prank(railsOwner);
+    function test_WhenCallerIsFactoryOwner_ShouldRegisterUnderPaymentRailsLookup() external {
         address module = factory.create(owner, paymentRails);
 
         address[] memory modules = factory.getModulesForPaymentRails(paymentRails);
@@ -178,28 +132,23 @@ contract Create_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
         assertEq(modules[0], module);
     }
 
-    function test_WhenCallerIsRailsOwner_ShouldEmitEvent() external {
+    function test_WhenCallerIsFactoryOwner_ShouldEmitEvent() external {
         // Check topic2 (paymentRails) and topic3 (owner) without asserting topic1 (unpredictable CREATE address).
         vm.expectEmit(false, true, true, true);
         emit CowSwapModuleCreated(address(0), paymentRails, owner);
 
-        vm.prank(railsOwner);
         factory.create(owner, paymentRails);
     }
 
     function test_WhenCalledMultipleTimes_ShouldDeployDistinctInstances() external {
-        vm.startPrank(railsOwner);
         address module1 = factory.create(owner, paymentRails);
         address module2 = factory.create(owner, paymentRails);
-        vm.stopPrank();
         assertTrue(module1 != module2);
     }
 
     function test_WhenCalledMultipleTimes_ShouldRegisterAllInstances() external {
-        vm.startPrank(railsOwner);
         address module1 = factory.create(owner, paymentRails);
         address module2 = factory.create(owner, paymentRails);
-        vm.stopPrank();
 
         assertTrue(factory.isDeployedModule(module1));
         assertTrue(factory.isDeployedModule(module2));
@@ -212,50 +161,12 @@ contract Create_CowSwapModuleFactory_Test is CowSwapModuleFactoryBase {
     }
 
     function test_WhenCalledMultipleTimes_ShouldAccumulateInPaymentRailsLookup() external {
-        vm.startPrank(railsOwner);
         address module1 = factory.create(owner, paymentRails);
         address module2 = factory.create(owner, paymentRails);
-        vm.stopPrank();
 
         address[] memory modules = factory.getModulesForPaymentRails(paymentRails);
         assertEq(modules.length, 2);
         assertEq(modules[0], module1);
         assertEq(modules[1], module2);
-    }
-
-    /*//////////////////////////////////////////////////////////////////////////
-                            OWNERSHIP TRANSFER FOLLOWS THE OWNER
-    //////////////////////////////////////////////////////////////////////////*/
-
-    function test_WhenOwnershipTransferred_ShouldRejectPreviousOwner() external {
-        address newOwner = makeAddr("newOwner");
-
-        vm.prank(railsOwner);
-        PaymentRails(paymentRails).transferOwnership(newOwner);
-        vm.prank(newOwner);
-        PaymentRails(paymentRails).acceptOwnership();
-
-        vm.prank(railsOwner);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Errors.CowSwapModuleFactory_CallerNotPaymentRailsOwner.selector, railsOwner, newOwner
-            )
-        );
-        factory.create(owner, paymentRails);
-    }
-
-    function test_WhenOwnershipTransferred_ShouldAcceptNewOwner() external {
-        address newOwner = makeAddr("newOwner");
-
-        vm.prank(railsOwner);
-        PaymentRails(paymentRails).transferOwnership(newOwner);
-        vm.prank(newOwner);
-        PaymentRails(paymentRails).acceptOwnership();
-
-        vm.prank(newOwner);
-        address module = factory.create(owner, paymentRails);
-
-        assertTrue(factory.isDeployedModule(module));
-        assertEq(CowSwapModule(module).paymentRails(), paymentRails);
     }
 }

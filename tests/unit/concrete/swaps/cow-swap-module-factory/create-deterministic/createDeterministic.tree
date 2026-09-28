@@ -1,14 +1,14 @@
 CowSwapModuleFactory_CreateDeterministic
+├── when the caller is not the factory owner
+│   ├── it should revert with OwnableUnauthorizedAccount
+│   └── it should leave the predicted address unoccupied
 ├── when owner is zero address
 │   └── it should revert with CowSwapModuleFactory_ZeroOwner
 ├── when paymentRails is zero address
 │   └── it should revert with CowSwapModuleFactory_ZeroPaymentRails
-├── when paymentRails is an EOA
+├── when paymentRails has no code
 │   └── it should revert with CowSwapModuleFactory_PaymentRailsNotContract
-├── when the caller is not the paymentRails owner
-│   ├── it should revert with CowSwapModuleFactory_CallerNotPaymentRailsOwner
-│   └── it should leave the predicted address unoccupied
-├── when the caller is the paymentRails owner
+├── when the caller is the factory owner
 │   ├── it should deploy a new CowSwapModule contract
 │   ├── it should set the owner on the deployed module
 │   ├── it should wire the module to the PaymentRails

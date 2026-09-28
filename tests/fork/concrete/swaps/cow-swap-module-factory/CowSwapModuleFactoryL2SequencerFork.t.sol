@@ -6,6 +6,7 @@ import { CowSwapModule } from "../../../../../src/modules/swaps/CowSwapModule.so
 import { CowSwapModuleFactory } from "../../../../../src/modules/swaps/CowSwapModuleFactory.sol";
 import { PaymentRails } from "../../../../../src/core/PaymentRails.sol";
 import { Errors } from "../../../../../src/libraries/Errors.sol";
+import { IChainlinkAggregatorV3 } from "../../../../../src/interfaces/IChainlinkAggregatorV3.sol";
 
 /// @title CowSwapModuleFactoryL2SequencerFork_Test
 /// @notice Fork tests for the L2 profile of CowSwapModuleFactory, against Base mainnet.
@@ -49,6 +50,7 @@ contract CowSwapModuleFactoryL2SequencerFork_Test is Test {
     CowSwapModuleFactory internal factory;
     PaymentRails internal paymentRails;
 
+    address internal factoryOwner;
     address internal railsOwner;
     address internal moduleOwner;
 
@@ -64,11 +66,12 @@ contract CowSwapModuleFactoryL2SequencerFork_Test is Test {
 
         vm.createSelectFork("base", FORK_BLOCK);
 
+        factoryOwner = makeAddr("factoryOwner");
         railsOwner = makeAddr("railsOwner");
         moduleOwner = makeAddr("moduleOwner");
 
         paymentRails = new PaymentRails(railsOwner);
-        factory = new CowSwapModuleFactory(GPV2_SETTLEMENT, SEQUENCER_UPTIME_FEED, GRACE_PERIOD);
+        factory = new CowSwapModuleFactory(factoryOwner, GPV2_SETTLEMENT, SEQUENCER_UPTIME_FEED, GRACE_PERIOD);
 
         // validate() measures the caller's balance, so fund this contract as the would-be PaymentRails.
         deal(WETH, address(this), WETH_SELL_AMOUNT * 10);
@@ -85,7 +88,7 @@ contract CowSwapModuleFactoryL2SequencerFork_Test is Test {
     }
 
     function _createModule(CowSwapModuleFactory target) internal returns (CowSwapModule) {
-        vm.prank(railsOwner);
+        vm.prank(factoryOwner);
         return CowSwapModule(target.create(moduleOwner, address(paymentRails)));
     }
 
@@ -102,7 +105,7 @@ contract CowSwapModuleFactoryL2SequencerFork_Test is Test {
     function test_RevertWhen_SequencerFeedIsEOA() external {
         address eoa = makeAddr("eoaSequencerFeed");
         vm.expectRevert(abi.encodeWithSelector(Errors.CowSwapModuleFactory_SequencerFeedNotContract.selector, eoa));
-        new CowSwapModuleFactory(GPV2_SETTLEMENT, eoa, GRACE_PERIOD);
+        new CowSwapModuleFactory(factoryOwner, GPV2_SETTLEMENT, eoa, GRACE_PERIOD);
     }
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -119,7 +122,7 @@ contract CowSwapModuleFactoryL2SequencerFork_Test is Test {
     function test_WhenCreateDeterministic_ShouldWireTheRealSequencerFeed() external {
         address predicted = factory.predictDeterministicAddress(moduleOwner, address(paymentRails), DEFAULT_SALT);
 
-        vm.prank(railsOwner);
+        vm.prank(factoryOwner);
         CowSwapModule module =
             CowSwapModule(factory.createDeterministic(moduleOwner, address(paymentRails), DEFAULT_SALT));
 
@@ -142,16 +145,43 @@ contract CowSwapModuleFactoryL2SequencerFork_Test is Test {
         assertEq(reason, "");
     }
 
-    /// @dev The mirror image: with a grace period longer than the feed's time since restart, the
-    /// same live feed must block the order. Without this, a feed that is merely present but never
-    /// consulted would pass the test above.
+    /// @dev The mirror image: inside the grace window the same live feed must block the order.
+    /// Without this, a feed that is merely present but never consulted would pass the test above.
+    /// @dev The window is reached by reading the live feed's own `startedAt` and moving the clock to
+    /// one second after it, rather than by configuring an absurd grace period. The feed, its answer
+    /// and its restart timestamp are all real Base state — only `block.timestamp` moves — so this
+    /// exercises the production GRACE_PERIOD (3600) that every module is actually deployed with.
     function test_WhenGracePeriodHasNotElapsed_ShouldRejectTheOrder() external {
-        CowSwapModuleFactory strictFactory = new CowSwapModuleFactory(GPV2_SETTLEMENT, SEQUENCER_UPTIME_FEED, 365 days);
-        CowSwapModule module = _createModule(strictFactory);
+        CowSwapModule module = _createModule(factory);
+
+        (, int256 answer, uint256 startedAt, uint256 updatedAt,) =
+            IChainlinkAggregatorV3(SEQUENCER_UPTIME_FEED).latestRoundData();
+        assertEq(answer, 0, "fork block must have the sequencer reporting up");
+
+        // The two timestamps are weeks apart on this feed, so a test that measured from the wrong
+        // one would still pass here. Assert they diverge, then measure from `startedAt` — the value
+        // the guard is specified against.
+        assertTrue(updatedAt > startedAt, "positions 3 and 4 must be distinct on the live feed");
+        vm.warp(startedAt + 1);
 
         (bool isValid, string memory reason) = module.validate(WETH, WETH_SELL_AMOUNT, _swapParams());
 
         assertFalse(isValid);
         assertEq(reason, "Oracle price unavailable");
+    }
+
+    /// @dev The grace period and the uptime feed are two halves of one guard, so the constructor
+    /// rejects a pair that cannot work. A value this large would make every module the factory
+    /// deploys permanently unable to price an order.
+    function test_RevertWhen_GracePeriodExceedsTheBound() external {
+        vm.expectRevert(abi.encodeWithSelector(Errors.CowSwapModuleFactory_InvalidGracePeriod.selector, 365 days));
+        new CowSwapModuleFactory(factoryOwner, GPV2_SETTLEMENT, SEQUENCER_UPTIME_FEED, 365 days);
+    }
+
+    /// @dev The opposite half: a zero grace period against a real feed would reduce the module's
+    /// check to `block.timestamp - startedAt < 0`, which is never true for uint256.
+    function test_RevertWhen_GracePeriodIsZeroWithARealFeed() external {
+        vm.expectRevert(abi.encodeWithSelector(Errors.CowSwapModuleFactory_InvalidGracePeriod.selector, 0));
+        new CowSwapModuleFactory(factoryOwner, GPV2_SETTLEMENT, SEQUENCER_UPTIME_FEED, 0);
     }
 }

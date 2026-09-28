@@ -5,8 +5,22 @@ CowSwapModuleFactory_Constructor
 │   └── it should revert with CowSwapModuleFactory_SettlementNotContract
 ├── when the sequencer uptime feed is non-zero and has no deployed code
 │   └── it should revert with CowSwapModuleFactory_SequencerFeedNotContract
+├── when the sequencer uptime feed is zero
+│   ├── when the grace period is non-zero
+│   │   └── it should revert with CowSwapModuleFactory_GracePeriodWithoutFeed
+│   └── when the grace period is zero
+│       └── it should deploy for the L1 profile
+├── when the sequencer uptime feed is a contract
+│   ├── when the grace period is zero
+│   │   └── it should revert with CowSwapModuleFactory_InvalidGracePeriod
+│   ├── when the grace period exceeds the maximum
+│   │   └── it should revert with CowSwapModuleFactory_InvalidGracePeriod
+│   ├── when the grace period equals the maximum
+│   │   └── it should deploy
+│   └── when the grace period is any value in range
+│       ├── it should accept every value in (0, MAX_SEQUENCER_GRACE_PERIOD]
+│       └── it should reject every value above MAX_SEQUENCER_GRACE_PERIOD
 └── when cowSettlement is a valid contract
     ├── it should set cowSettlement
     ├── it should set sequencerUptimeFeed
-    ├── it should set sequencerGracePeriod
-    └── it should accept a zero sequencer feed for the L1 profile
+    └── it should set sequencerGracePeriod

@@ -7,6 +7,10 @@ import { Script } from "forge-std/src/Script.sol";
 /// @author Credit Cooperative
 /// @notice Base contract for deployment scripts with transaction broadcasting utilities
 abstract contract BaseScript is Script {
+    /// @dev Thrown when the broadcaster would be derived from the public test mnemonic on a chain that
+    /// is not a local node and `ALLOW_TEST_MNEMONIC` is not set.
+    error BaseScript_TestMnemonicOnLiveChain(uint256 chainId);
+
     /// @dev Included to enable compilation of the script without a $MNEMONIC environment variable.
     string internal constant TEST_MNEMONIC = "test test test test test test test test test test test junk";
 
@@ -23,7 +27,8 @@ abstract contract BaseScript is Script {
     ///
     /// - If $ETH_FROM is defined, use it.
     /// - Otherwise, derive the broadcaster address from $MNEMONIC.
-    /// - If $MNEMONIC is not defined, default to a test mnemonic.
+    /// - If $MNEMONIC is not defined, default to a test mnemonic — local nodes only. On any other chain
+    ///   id this reverts unless $ALLOW_TEST_MNEMONIC is set, which only the fork harnesses should do.
     ///
     /// The use case for $ETH_FROM is to specify the broadcaster key and its address via the command line.
     constructor() {
@@ -32,6 +37,15 @@ abstract contract BaseScript is Script {
             broadcaster = from;
         } else {
             mnemonic = vm.envOr({ name: "MNEMONIC", defaultValue: TEST_MNEMONIC });
+            // The test mnemonic is public and its addresses carry EIP-7702 delegations on live chains:
+            // a broadcast would sign with a key everyone holds, and gas sent to it is forwarded away on
+            // arrival. Anvil forks report the forked chain's id, so harnesses opt in explicitly.
+            if (
+                block.chainid != 31_337 && keccak256(bytes(mnemonic)) == keccak256(bytes(TEST_MNEMONIC))
+                    && !vm.envOr({ name: "ALLOW_TEST_MNEMONIC", defaultValue: false })
+            ) {
+                revert BaseScript_TestMnemonicOnLiveChain(block.chainid);
+            }
             (broadcaster,) = deriveRememberKey({ mnemonic: mnemonic, index: 0 });
         }
     }

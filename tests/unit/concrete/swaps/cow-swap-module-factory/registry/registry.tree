@@ -12,6 +12,6 @@ CowSwapModuleFactory_Registry
 │   └── it should keep per-PaymentRails lookups separate
 ├── given a mix of create and createDeterministic deployments
 │   └── it should track both in the same registry
-└── given an attacker attempts to poison another instance lookup
-    ├── it should keep the victim lookup empty
-    └── it should only list modules the instance owner deployed
+└── given a non-owner attempts to register a module
+    ├── it should register nothing even if the caller owns a PaymentRails
+    └── it should only list modules the factory owner deployed

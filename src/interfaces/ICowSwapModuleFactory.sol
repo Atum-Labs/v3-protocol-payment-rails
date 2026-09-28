@@ -9,14 +9,12 @@ pragma solidity 0.8.29;
 /// so the registry guarantees both bytecode and wiring of every registered module. Supports
 /// both CREATE (simple) and CREATE2 (deterministic) deployment.
 ///
-/// Deployment is permissioned: only the current owner of the target PaymentRails may deploy a
-/// module bound to it. The registry is indexed by PaymentRails and is meant to be trusted as
-/// "the modules this instance's owner stands behind", so an unauthenticated {create} would let
-/// anyone list an attacker-owned module under a victim's PaymentRails. Ownership is read at call
-/// time, so the right to register modules follows an Ownable2Step transfer to the accepted owner.
+/// Deployment is owner-gated: only the factory owner may deploy modules, so every registry entry
+/// was authored by this organization. The factory cannot verify `paymentRails` is a genuine
+/// PaymentRails; verify `module.paymentRails()` and `module.owner()` before wiring a module.
 ///
-/// Registration is an authorization record, not an activation: a module only becomes live once
-/// the PaymentRails owner also points a token config at it via `configureToken`.
+/// Registration is provenance, not authorization: a module only becomes live once the PaymentRails
+/// owner points a token config at it via `configureToken`.
 interface ICowSwapModuleFactory {
     /*//////////////////////////////////////////////////////////////////////////
                                     EVENTS
@@ -36,13 +34,12 @@ interface ICowSwapModuleFactory {
     /// @dev Emits a {CowSwapModuleCreated} event.
     ///
     /// Requirements:
+    /// - caller must be the factory owner
     /// - `owner` must not be `address(0)`
     /// - `paymentRails` must not be `address(0)`
-    /// - `paymentRails` must be a contract exposing `owner()`
-    /// - `msg.sender` must be the current owner of `paymentRails`
+    /// - `paymentRails` must have code
     ///
-    /// @param owner The initial owner of the CowSwapModule (can cancel orders). May differ from the
-    /// PaymentRails owner; the PaymentRails owner chooses it.
+    /// @param owner The initial owner of the CowSwapModule (can cancel orders).
     /// @param paymentRails The PaymentRails instance authorized to call the module's execute().
     /// @return module The address of the deployed CowSwapModule contract.
     function create(address owner, address paymentRails) external returns (address module);
@@ -52,10 +49,10 @@ interface ICowSwapModuleFactory {
     /// via {predictDeterministicAddress}. Reverts if a contract already exists at the predicted address.
     ///
     /// Requirements:
+    /// - caller must be the factory owner
     /// - `owner` must not be `address(0)`
     /// - `paymentRails` must not be `address(0)`
-    /// - `paymentRails` must be a contract exposing `owner()`
-    /// - `msg.sender` must be the current owner of `paymentRails`
+    /// - `paymentRails` must have code
     /// - The `(owner, paymentRails, salt)` combination must not have been used before
     ///
     /// @param owner The initial owner of the CowSwapModule (can cancel orders).
@@ -115,10 +112,8 @@ interface ICowSwapModuleFactory {
     function getModuleCount() external view returns (uint256 count);
 
     /// @notice Return all CowSwapModule instances deployed for a given PaymentRails.
-    /// @dev Every entry was deployed by the `paymentRails` owner at the time of deployment. Multiple
-    /// modules per PaymentRails are possible (e.g. redeployments); the last entry is the most recently
-    /// deployed. Ownership may have changed since, so treat this as a historical authorization log
-    /// rather than proof of the current owner's intent.
+    /// @dev Multiple modules per PaymentRails are possible (e.g. redeployments); the last entry is
+    /// the most recent. Provenance only: the wired module is `getTokenConfig(token).actionModule`.
     /// @param paymentRails The PaymentRails instance to look up.
     /// @return modules Array of CowSwapModule addresses wired to `paymentRails`.
     function getModulesForPaymentRails(address paymentRails) external view returns (address[] memory modules);
