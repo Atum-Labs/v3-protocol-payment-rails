@@ -1,11 +1,15 @@
 AtumModuleFactory_CreateDeterministic
+├── when the caller is not the factory owner
+│   ├── it should revert with OwnableUnauthorizedAccount
+│   ├── it should revert even for the PaymentRails owner
+│   └── it should not let a stranger occupy the predicted address first
 ├── when owner is zero address
 │   └── it should revert with AtumModuleFactory_ZeroOwner
 ├── when paymentRails is zero address
 │   └── it should revert with AtumModuleFactory_ZeroPaymentRails
 ├── when keeper is zero address
 │   └── it should revert with AtumModuleFactory_ZeroKeeper
-└── when params are valid
+└── when the caller is the factory owner and params are valid
     ├── it should deploy a new AtumModule contract
     ├── it should set the owner on the deployed module
     ├── it should wire the module to the PaymentRails
@@ -19,5 +23,7 @@ AtumModuleFactory_CreateDeterministic
     │   └── it should deploy to different addresses
     ├── when the same salt is used with different owners
     │   └── it should deploy to different addresses
-    └── when the same salt is used with different PaymentRails
-        └── it should deploy to different addresses
+    ├── when the same salt is used with different PaymentRails
+    │   └── it should deploy to different addresses
+    └── when the same salt is used by a new factory owner after a transfer
+        └── it should deploy to a different, deployer-scoped address
