@@ -4,6 +4,7 @@ pragma solidity ^0.8.29;
 import { AtumModuleFactoryBase } from "../AtumModuleFactoryBase.t.sol";
 import { AtumModule } from "../../../../../../../src/modules/contrib/bridges/AtumModule.sol";
 import { Errors } from "../../../../../../../src/libraries/Errors.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
     function test_RevertWhen_OwnerIsZeroAddress() external {
@@ -89,8 +90,8 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
         assertTrue(module1 != module2);
     }
 
-    /// @dev The PaymentRails address is no longer fuzzed: Certora L-01 requires it to be a real
-    ///      contract whose `owner()` is the caller, so an arbitrary address cannot be used. Owner,
+    /// @dev The PaymentRails address is not fuzzed: it must be an instance on the PaymentRailsFactory
+    ///      list, so an arbitrary address cannot be used. Owner,
     ///      keeper and salt stay fuzzed, which is what this test is actually about -- that
     ///      prediction tracks deployment across inputs.
     function testFuzz_PredictedAddressMatchesActual(address fuzzOwner, address fuzzKeeper, bytes32 fuzzSalt) external {
@@ -103,16 +104,25 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
         assertEq(actual, predicted);
     }
 
-    /// I-04. Two deployers using the SAME salt must not collide -- that collision is the
-    /// front-running vector: watch a createDeterministic in the mempool, deploy to its address
-    /// first, and the legitimate call reverts.
+    /// I-04. The salt is bound to the caller. With creation owner-gated no third party can
+    /// front-run, but the binding still keeps each factory owner's address space disjoint: after
+    /// an ownership transfer, the new owner reusing a salt with the same params does not collide
+    /// with the old owner's deployment.
     function test_CreateDeterministic_SameSaltDifferentDeployersDoNotCollide() external {
         address moduleA = factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
 
-        vm.prank(foreignRailsOwner);
-        address moduleB = factory.createDeterministic(owner, foreignPaymentRails, keeper, DEFAULT_SALT);
+        address newFactoryOwner = makeAddr("newFactoryOwner");
+        factory.transferOwnership(newFactoryOwner);
+        vm.prank(newFactoryOwner);
+        factory.acceptOwnership();
+
+        vm.prank(newFactoryOwner);
+        address moduleB = factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
 
         assertTrue(moduleA != moduleB, "same salt must not mean the same address for two deployers");
+        assertEq(
+            moduleB, factory.predictDeterministicAddress(newFactoryOwner, owner, paymentRails, keeper, DEFAULT_SALT)
+        );
     }
 
     /// The salt is bound to the caller, so prediction for a different deployer differs.
@@ -123,13 +133,26 @@ contract CreateDeterministic_AtumModuleFactory_Test is AtumModuleFactoryBase {
         assertTrue(forThis != forOther, "prediction must be deployer-scoped");
     }
 
-    /// L-01. A stranger cannot deploy a module naming someone else's PaymentRails.
-    function test_CreateDeterministic_RevertsWhenCallerIsNotPaymentRailsOwner() external {
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Errors.AtumModuleFactory_NotPaymentRailsOwner.selector, address(this), foreignRailsOwner
-            )
-        );
+    /// L-01. Both creation paths are gated: leaving either open would defeat the restriction.
+    function test_RevertWhen_CallerIsNotFactoryOwner() external {
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
+    }
+
+    function test_RevertWhen_CallerIsPaymentRailsOwnerButNotFactoryOwner() external {
+        vm.prank(foreignRailsOwner);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, foreignRailsOwner));
         factory.createDeterministic(owner, foreignPaymentRails, keeper, DEFAULT_SALT);
+    }
+
+    /// Owner-gated creation is also what stops a mempool observer occupying the address first.
+    function test_RevertWhen_StrangerFrontRunsTheSameParams() external {
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
+
+        address module = factory.createDeterministic(owner, paymentRails, keeper, DEFAULT_SALT);
+        assertEq(module, factory.predictDeterministicAddress(address(this), owner, paymentRails, keeper, DEFAULT_SALT));
     }
 }

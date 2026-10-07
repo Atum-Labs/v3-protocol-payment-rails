@@ -9,6 +9,15 @@ import { IPaymentRailsFactory } from "./IPaymentRailsFactory.sol";
 /// so each PaymentRails needs its own dedicated module instance. This factory deploys them with the
 /// chain-specific Permit2 fixed as a factory immutable, so the registry guarantees both bytecode and
 /// wiring of every registered module. Supports both CREATE (simple) and CREATE2 (deterministic).
+///
+/// Deployment is owner-gated: only the factory owner may deploy modules, so every registry entry
+/// was authored by this organization (Certora L-01). The PaymentRails owner does not need to be
+/// the caller; the factory owner deploys on their behalf. `paymentRails` must be an instance
+/// {paymentRailsFactory} deployed, which catches a wrong address but is not an authorization.
+///
+/// Registration is provenance, not authorization: a module only becomes live once the PaymentRails
+/// owner points a token config at it via `configureToken`. Verify `module.owner()`,
+/// `module.keeper()` and `module.paymentRails()` before wiring a module.
 interface IAtumModuleFactory {
     /*//////////////////////////////////////////////////////////////////////////
                                     EVENTS
@@ -36,14 +45,15 @@ interface IAtumModuleFactory {
     /// @dev Emits an {AtumModuleCreated} event.
     ///
     /// Requirements:
+    /// - caller must be the factory owner (Certora L-01)
     /// - `owner` must not be `address(0)`
     /// - `paymentRails` must not be `address(0)`
     /// - `keeper` must not be `address(0)`
     /// - `paymentRails` must be a contract
     /// - `paymentRails` must be an instance deployed by {paymentRailsFactory}
-    /// - the caller must be `Ownable(paymentRails).owner()` (Certora L-01)
     ///
-    /// @param owner The initial owner of the AtumModule (can rotate the keeper and pause).
+    /// @param owner The initial owner of the AtumModule (can rotate the keeper and pause). May differ
+    /// from the PaymentRails owner.
     /// @param paymentRails The PaymentRails instance authorized to call the module's execute().
     /// @param keeper The keeper authorized to invalidate digests on the module.
     /// @return module The address of the deployed AtumModule contract.
@@ -54,12 +64,12 @@ interface IAtumModuleFactory {
     /// via {predictDeterministicAddress}. Reverts if a contract already exists at the predicted address.
     ///
     /// Requirements:
+    /// - caller must be the factory owner (Certora L-01)
     /// - `owner` must not be `address(0)`
     /// - `paymentRails` must not be `address(0)`
     /// - `keeper` must not be `address(0)`
     /// - `paymentRails` must be a contract
     /// - `paymentRails` must be an instance deployed by {paymentRailsFactory}
-    /// - the caller must be `Ownable(paymentRails).owner()` (Certora L-01)
     /// - The `(msg.sender, owner, paymentRails, keeper, salt)` combination must not have been used
     ///   before. The caller is part of the key because the CREATE2 salt is bound to it
     ///   (Certora I-04), so the same salt used by two deployers yields two distinct addresses.
@@ -127,7 +137,8 @@ interface IAtumModuleFactory {
 
     /// @notice Return all AtumModule instances deployed for a given PaymentRails.
     /// @dev Multiple modules per PaymentRails are possible (e.g. redeployments); the last entry
-    /// is the most recently deployed.
+    /// is the most recently deployed. Provenance only: the wired module is
+    /// `getTokenConfig(token).actionModule`.
     /// @param paymentRails The PaymentRails instance to look up.
     /// @return modules Array of AtumModule addresses wired to `paymentRails`.
     function getModulesForPaymentRails(address paymentRails) external view returns (address[] memory modules);

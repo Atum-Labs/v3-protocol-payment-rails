@@ -8,25 +8,25 @@
 
 Three further observations raised during the fix review are answered under [Fix-review follow-on](#fix-review-follow-on-three-observations-on-the-mitigations): two fixed, one acknowledged with the reasoning recorded.
 
-Each fix is accompanied by a regression test. `forge test`: **664 pass, 0 fail, 57 skipped** across 104 suites. `solhint`: 0 errors.
+Each fix is accompanied by a regression test. `forge test`: **679 pass, 0 fail, 57 skipped** across 105 suites. `solhint`: 0 errors.
 
 ---
 
 ## Summary
 
-| ID   | Severity | Response                                                     |
-| ---- | -------- | ------------------------------------------------------------ |
-| M-01 | Medium   | Fixed — by the Escrow integration + ERC-1271 caller allowlist |
-| L-01 | Low      | Fixed — creation restricted to the PaymentRails owner        |
-| L-02 | Low      | Fixed — `syncAllowance`, keeper-gated                        |
-| L-03 | Low      | Fixed — addressed together with I-05                         |
+| ID   | Severity | Response                                                                                                                                   |
+| ---- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| M-01 | Medium   | Fixed — by the Escrow integration + ERC-1271 caller allowlist                                                                              |
+| L-01 | Low      | Fixed — creation restricted to the factory owner                                                                                           |
+| L-02 | Low      | Fixed — `syncAllowance`, keeper-gated                                                                                                      |
+| L-03 | Low      | Fixed — addressed together with I-05                                                                                                       |
 | L-04 | Low      | Acknowledged — a config change cannot redirect a currently-held balance; a later refund can be paid to the new route, and that is accepted |
-| I-01 | Info     | Resolved by giving the unused modifier a caller              |
-| I-02 | Info     | Fixed — `renounceOwnership` reverts                          |
-| I-03 | Info     | Fixed — initial keeper emitted by the module and the factory |
-| I-04 | Info     | Fixed — CREATE2 salt bound to the caller                     |
-| I-05 | Info     | Fixed — addressed together with L-03                         |
-| I-06 | Info     | Fixed — sender debit now checked                             |
+| I-01 | Info     | Resolved by giving the unused modifier a caller                                                                                            |
+| I-02 | Info     | Fixed — `renounceOwnership` reverts                                                                                                        |
+| I-03 | Info     | Fixed — initial keeper emitted by the module and the factory                                                                               |
+| I-04 | Info     | Fixed — CREATE2 salt bound to the caller                                                                                                   |
+| I-05 | Info     | Fixed — addressed together with L-03                                                                                                       |
+| I-06 | Info     | Fixed — sender debit now checked                                                                                                           |
 
 **A key-management constraint accompanies M-01 as defence in depth.** The replay is only constructible between modules that share a keeper, so modules are to be issued distinct keepers. This is a deployment-time constraint on key management, **not enforced on-chain**. It is not what prevents the finding — see M-01 below for what does — but it is the layer that survives if that argument's assumptions are ever violated.
 
@@ -39,7 +39,7 @@ Two additional observations arising from the review:
 
 ## M-01 — cross-module signature replay (Medium)
 
-**Status: the replay is prevented, by the integrating protocol rather than by a digest binding in this module.** This is the case the report's own Impact paragraph anticipates — *"Exact impact depends on the integrating protocol and whether its digest independently binds the module address."* Atum Escrow binds it, not inside the Permit2 digest but as an independently-signed precondition that must pass before Permit2 is called at all. The recommended EIP-712 wrap was implemented, found to be incompatible with the keeper's authorisation model, and withdrawn; what ships in this module is a restriction on which applications can reach its ERC-1271 surface, which is what makes the Escrow argument sound rather than incidental.
+**Status: the replay is prevented, by the integrating protocol rather than by a digest binding in this module.** This is the case the report's own Impact paragraph anticipates — _"Exact impact depends on the integrating protocol and whether its digest independently binds the module address."_ Atum Escrow binds it, not inside the Permit2 digest but as an independently-signed precondition that must pass before Permit2 is called at all. The recommended EIP-712 wrap was implemented, found to be incompatible with the keeper's authorisation model, and withdrawn; what ships in this module is a restriction on which applications can reach its ERC-1271 surface, which is what makes the Escrow argument sound rather than incidental.
 
 **Mechanism.** `isValidSignature` validated the caller's raw hash directly against the keeper. The digest Permit2 constructs does not contain the owner, and Permit2 tracks nonces per owner. Two modules sharing a keeper therefore accepted the identical `(hash, signature)` pair, and one authorisation could be spent once at each.
 
@@ -48,34 +48,34 @@ Two additional observations arising from the review:
 1. **Permit2 binds the spender to the caller.** `PermitHash.hashWithWitness` puts `msg.sender` into the signed struct, so only the contract named as spender can present the signature at all. The keeper's signing policy independently pins `message['spender']` to an allowlisted Escrow, so no other spender is ever signed for.
 2. **This module answers only Permit2.** `isAuthorizedSignatureCaller` is seeded with Permit2 at construction, so there is no second route to the ERC-1271 surface.
 3. **Escrow derives `depositId` from the depositor** — `keccak256(abi.encode(depositor, depositSignature, permit.nonce))` — and requires it to equal `reserveWitness.depositId`. Replaying a deposit signature against a second module changes `depositor`, so it changes `depositId`, so the attacker must supply a reserve witness carrying the new value.
-4. **That reserve witness must be signed by the reserver**, and `reserver` is a member of the *deposit* witness, so it cannot be swapped without invalidating the very signature being replayed. The attacker therefore needs the legitimate reserver to sign a `ReserveWitness` whose `depositId` commits to the victim module.
+4. **That reserve witness must be signed by the reserver**, and `reserver` is a member of the _deposit_ witness, so it cannot be swapped without invalidating the very signature being replayed. The attacker therefore needs the legitimate reserver to sign a `ReserveWitness` whose `depositId` commits to the victim module.
 
-Escrow verifies the reserve signature *before* calling Permit2 — deliberately, so the external call happens last — so a replayed deposit reverts `DepositNotFound` before this module's `isValidSignature` is ever reached. Both `deposit()` and `depositMany()` route through the same `_deposit`, so neither path is exempt.
+Escrow verifies the reserve signature _before_ calling Permit2 — deliberately, so the external call happens last — so a replayed deposit reverts `DepositNotFound` before this module's `isValidSignature` is ever reached. Both `deposit()` and `depositMany()` route through the same `_deposit`, so neither path is exempt.
 
 **What this rests on, stated plainly.** That the reserver is an independent party from the keeper, and that it signs only `depositId` values it can attribute to a deposit authorisation it actually issued. A reserver that blind-signs an arbitrary `depositId`, or a reserver key held alongside the keeper key, removes the protection. This is a property of the composed system — Permit2, Escrow, the reserver role and this module together — not of any one contract.
 
 **Why the keeper's signing policy cannot substitute for the reserver.** It is tempting to treat the keeper's policy engine as the control, since it refuses to sign anything whose spender, token, reserver, releaser or destination is not allowlisted. It cannot cover this case, for the same structural reason the finding exists: **Permit2's signed struct has no owner field, so the policy cannot bind which module a signature is for.** Concretely, an attacker with keeper signing access obtains a signature for a digest describing a deposit from a module they control — the policy permits it, every bound field is legitimate — and then submits it with `depositor` set to a funded module instead. Every check in the keeper's policy passes. Link 4 is what fails: the `depositId` changes with the depositor, and the attacker has no reserver signature over the new one. **Separating the reserver key from the keeper key is therefore a requirement, not hygiene.**
 
-**Coupling to the out-of-scope gateway item (#13).** The four links above describe the standard Escrow deposit flow with `depositor = AtumModule`, which is precisely the flow #13 reports as currently blocked: the gateway `ecrecover`s the sender-auth signature and requires the recovered address to equal `source.account`, which no contract wallet satisfies. **Whatever unblocks #13 must be re-checked against this argument.** In particular #13 notes that setting `source.account = keeper` does not work because Permit2 would then pull from the keeper; it would also void the protection described here, because the Permit2 owner would become an EOA and the `depositId` binding would commit to a different party. 
-**The four links are executed, not merely read.** The contract-depositor path previously had no coverage on the Escrow side — every deposit-flow test there uses an EOA depositor, where Permit2's own `ecrecover` binds the owner and the finding cannot arise, so the one case where it *can* arise was untested. `test/Escrow.contractDepositorReplay.t.sol` in the Escrow repository now runs it against real Permit2 with two ERC-1271 wallets sharing a keeper:
+**Coupling to the out-of-scope gateway item (#13).** The four links above describe the standard Escrow deposit flow with `depositor = AtumModule`, which is precisely the flow #13 reports as currently blocked: the gateway `ecrecover`s the sender-auth signature and requires the recovered address to equal `source.account`, which no contract wallet satisfies. **Whatever unblocks #13 must be re-checked against this argument.** In particular #13 notes that setting `source.account = keeper` does not work because Permit2 would then pull from the keeper; it would also void the protection described here, because the Permit2 owner would become an EOA and the `depositId` binding would commit to a different party.
+**The four links are executed, not merely read.** The contract-depositor path previously had no coverage on the Escrow side — every deposit-flow test there uses an EOA depositor, where Permit2's own `ecrecover` binds the owner and the finding cannot arise, so the one case where it _can_ arise was untested. `test/Escrow.contractDepositorReplay.t.sol` in the Escrow repository now runs it against real Permit2 with two ERC-1271 wallets sharing a keeper:
 
-| Test | Asserts |
-| --- | --- |
-| `test_bothWalletsValidateTheSameKeeperSignature` | the precondition is real — one keeper signature satisfies both ERC-1271 surfaces |
-| `test_replayAgainstAnotherWallet_revertsDepositNotFound` | the verbatim replay is refused before Permit2 is reached |
-| `test_replayWithRecomputedDepositId_revertsInvalidSignature` | recomputing `depositId` for the victim fails for want of a reserver signature |
-| `test_afterASucceeds_replayToBStillNeedsAReserverSignature` | the per-owner nonce is still free after a legitimate deposit, and still unspendable |
-| `test_depositForTheIntendedWallet_succeeds` | the control — the same authorisation works for the wallet it was issued for |
+| Test                                                         | Asserts                                                                             |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `test_bothWalletsValidateTheSameKeeperSignature`             | the precondition is real — one keeper signature satisfies both ERC-1271 surfaces    |
+| `test_replayAgainstAnotherWallet_revertsDepositNotFound`     | the verbatim replay is refused before Permit2 is reached                            |
+| `test_replayWithRecomputedDepositId_revertsInvalidSignature` | recomputing `depositId` for the victim fails for want of a reserver signature       |
+| `test_afterASucceeds_replayToBStillNeedsAReserverSignature`  | the per-owner nonce is still free after a legitimate deposit, and still unspendable |
+| `test_depositForTheIntendedWallet_succeeds`                  | the control — the same authorisation works for the wallet it was issued for         |
 
 Both replay cases also assert the victim's balance is unchanged.
 
 **Why the recommended EIP-712 wrap was withdrawn.** It was implemented and it worked, binding `address(this)` and `chainid` into the signed payload. It is not shipped because it is incompatible with how the keeper authorises payments. The keeper is a policy-gated signer whose policy inspects the `PermitWitnessTransferFrom` struct — spender, permitted token and amount, and the witness members that carry the payout instruction — and refuses to release a signature for anything that does not match an expected payment. Wrapping makes the only thing the keeper ever signs an opaque `bytes32`, leaving that policy nothing to read; in the deployed configuration the wrapped payload matches no allow rule at all and simply cannot be signed. Trading an enforced authorisation policy for an on-chain replay binding is not a clear net gain, and not a trade to make silently.
 
-**What the module enforces instead: who may ask.** `isValidSignature` answers only callers in `isAuthorizedSignatureCaller`, seeded with Permit2 at construction and otherwise an explicit owner decision through `setSignatureCaller`. This is aimed squarely at the report's own generalisation — *"The problem is not specific to Permit2; Permit2 is one confirmed exploitation path."* A keeper signature was a bearer token at every ERC-1271 surface treating this module as a signer; it is now confined to applications that were deliberately trusted, which turns an open-ended exposure into a bounded one.
+**What the module enforces instead: who may ask.** `isValidSignature` answers only callers in `isAuthorizedSignatureCaller`, seeded with Permit2 at construction and otherwise an explicit owner decision through `setSignatureCaller`. This is aimed squarely at the report's own generalisation — _"The problem is not specific to Permit2; Permit2 is one confirmed exploitation path."_ A keeper signature was a bearer token at every ERC-1271 surface treating this module as a signer; it is now confined to applications that were deliberately trusted, which turns an open-ended exposure into a bounded one.
 
-**Why nothing more is enforceable at this layer.** ERC-1271 supplies a 32-byte keccak output and no preimage. The domain the digest was built under, the spender it names, the amount it moves and the witness it carries are all unreachable from inside the module. Any check the module could make about the digest's *contents* would either require the caller to supply the preimage — which the caller is the attacker in the replay scenario — or re-derive what the constructing application already guarantees. Permit2 builds the digest under its own domain separator and cannot present anything else; Escrow fixes the witness. Re-deriving either inside the module checks those contracts against themselves.
+**Why nothing more is enforceable at this layer.** ERC-1271 supplies a 32-byte keccak output and no preimage. The domain the digest was built under, the spender it names, the amount it moves and the witness it carries are all unreachable from inside the module. Any check the module could make about the digest's _contents_ would either require the caller to supply the preimage — which the caller is the attacker in the replay scenario — or re-derive what the constructing application already guarantees. Permit2 builds the digest under its own domain separator and cannot present anything else; Escrow fixes the witness. Re-deriving either inside the module checks those contracts against themselves.
 
-**Be precise about what the allowlist does and does not do.** In isolation it does not narrow the reported replay: two modules sharing a keeper sit behind the *same* Permit2 — there is one per chain — so both authorise it and both would validate the identical `(hash, signature)` pair if asked. Its role is to guarantee that Permit2, and therefore Escrow, is the *only* application that can ask. Without it, the four-link argument above covers one integration while a keeper signature stays a bearer token everywhere else.
+**Be precise about what the allowlist does and does not do.** In isolation it does not narrow the reported replay: two modules sharing a keeper sit behind the _same_ Permit2 — there is one per chain — so both authorise it and both would validate the identical `(hash, signature)` pair if asked. Its role is to guarantee that Permit2, and therefore Escrow, is the _only_ application that can ask. Without it, the four-link argument above covers one integration while a keeper signature stays a bearer token everywhere else.
 
 **Consequences for authorising a second caller.** `setSignatureCaller` extends the same trust to another application, and the argument above does not transfer with it. Any application authorised here must independently bind the module address somewhere in its own flow, as Escrow does through `depositId`. The NatSpec on `setSignatureCaller` says so.
 
@@ -138,11 +138,13 @@ The original recommendation remains available as an alternative, at the cost of 
 
 ## L-01 and I-04 — permissionless creation and deterministic front-running
 
-**L-01.** Creation was permissionless, so any address could deploy a factory module naming another party's PaymentRails while assigning itself owner and keeper. The result satisfies `isDeployedModule` and appears in `getModulesForPaymentRails`. The factory documentation already states that the registry is informational and not an authorisation signal, which addresses whether membership implies trust, but not whether a third party can write into another party's listing. Creation now requires the caller to be the PaymentRails owner.
+**L-01.** Creation was permissionless, so any address could deploy a factory module naming another party's PaymentRails while assigning itself owner and keeper. The result satisfies `isDeployedModule` and appears in `getModulesForPaymentRails`. The factory documentation already states that the registry is informational and not an authorisation signal, which addresses whether membership implies trust, but not whether a third party can write into another party's listing. Creation is now `onlyOwner` on the factory, mirroring `PaymentRailsFactory` and `CowSwapModuleFactory`: only the factory owner (the multisig) can write to the registry, and both creation paths are gated. The factory is `Ownable2Step`, takes its owner as a constructor argument so the deployer key never holds the role, and `renounceOwnership` reverts, since renouncing would leave both creation paths permanently uncallable.
 
-> **Operational consequence.** Any deployment flow whose caller is not the PaymentRails owner now requires either the owner as caller, or a deployer allowlist in place of the owner check.
+> **Superseded mechanism.** The first fix gated creation on `Ownable(paymentRails).owner() == msg.sender`. Any contract can answer `owner()` with a chosen address, so that check was only sound once fix-review item 3 put a PaymentRailsFactory membership check in front of it. Gating on the factory's own owner removes the need to trust the PaymentRails' answer at all, and `AtumModuleFactory_NotPaymentRailsOwner` is removed.
 
-**I-04.** `createDeterministic` used the caller-supplied salt directly, so an observer could deploy to the same address first and cause the legitimate deployment to revert. The salt is now `keccak256(deployer, salt)`, making each deployer's address space disjoint and removing the race rather than narrowing it.
+> **Operational consequence.** PaymentRails owners no longer deploy their own modules; the factory owner deploys on their behalf, choosing `owner`, `keeper` and `paymentRails`. `paymentRails` is immutable on the module; the module owner can rotate the keeper and transfer ownership. A module is only live once the PaymentRails owner points a token config at it via `configureToken`, so they should verify `module.owner()`, `module.keeper()` and `module.paymentRails()` first.
+
+**I-04.** `createDeterministic` used the caller-supplied salt directly, so an observer could deploy to the same address first and cause the legitimate deployment to revert. The salt is now `keccak256(deployer, salt)`, making each deployer's address space disjoint and removing the race rather than narrowing it. With L-01's owner gating, a third party can no longer call `createDeterministic` at all; the binding is kept so that addresses stay deployer-scoped across a factory ownership transfer.
 
 > **This changes every deterministic address.** Any precomputed address must be recalculated. `predictDeterministicAddress` therefore takes `deployer` explicitly, since prediction is an off-chain read and the requesting party is usually not the deploying party.
 
@@ -202,11 +204,13 @@ Documented on `IAtumModule.stagedRoute` and the module header, and pinned by `te
 
 > **Raised with the auditor and closed.** We asked whether an `onlyOwner clearStagedRoute(address token)` emitting an event would be accepted, so that a deliberate redirect is explicit and logged rather than requiring a pause and a full sweep. Declined, and we agree with the reasoning: because refunds can land unexpectedly and be picked up by `syncAllowance`, clearing the record would not address the underlying behaviour. The finding is recorded as acknowledged with both halves: a config change cannot redirect a balance this module currently holds; a later refund can be paid to the new route, and that is accepted. No function was added.
 
-### 3. `_checkPaymentRailsOwner` does not verify that `paymentRails` is a PaymentRails — fixed
+### 3. `_checkPaymentRailsOwner` does not verify that `paymentRails` is a PaymentRails — fixed, then superseded by owner gating
 
 The conclusion was correct, and the mechanism needed one correction: `Ownable(paymentRails).owner()` is called by the factory, so a contract whose `owner()` returns `msg.sender` does not satisfy the check. The shape that works is a contract returning a hardcoded caller-controlled address.
 
-Shape probes stay out. ERC-165, `getTokenConfig`, and any marker function are forgeable by the contract being probed. The check that is not forgeable is membership in PaymentRailsFactory. That factory records every PaymentRails it deploys, and only its owner can add to the list. `AtumModuleFactory` now reverts with `AtumModuleFactory_PaymentRailsNotContract` when `paymentRails` has no code, then with `AtumModuleFactory_UnknownPaymentRails` unless `paymentRailsFactory.isDeployedInstance(paymentRails)` is true, and only then reads `owner()`. Once the address is on that list, the code is a real PaymentRails and its `owner()` answer can be trusted.
+Shape probes stay out. ERC-165, `getTokenConfig`, and any marker function are forgeable by the contract being probed. The check that is not forgeable is membership in PaymentRailsFactory. That factory records every PaymentRails it deploys, and only its owner can add to the list. `AtumModuleFactory` reverts with `AtumModuleFactory_PaymentRailsNotContract` when `paymentRails` has no code, then with `AtumModuleFactory_UnknownPaymentRails` unless `paymentRailsFactory.isDeployedInstance(paymentRails)` is true.
+
+**Since superseded.** L-01 is now answered by owner-gating the factory, so `owner()` is no longer read and this check no longer has to make that answer trustworthy. The membership check is kept as a wiring check on what the factory owner passes. Unlike a code-length check, which a lookalike or an EIP-7702-delegated EOA passes, it cannot be satisfied by anything PaymentRailsFactory did not deploy.
 
 A PaymentRails deployed outside the factory is rejected. That is the cost of trusting the list. `new AtumModule(...)` still bypasses this factory, so the module registry remains informational.
 

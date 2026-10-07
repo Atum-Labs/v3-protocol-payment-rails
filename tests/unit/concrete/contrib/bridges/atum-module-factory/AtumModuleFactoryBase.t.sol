@@ -34,11 +34,14 @@ abstract contract AtumModuleFactoryBase is Test {
     MockPaymentRailsFactory internal railsFactory;
 
     address internal owner;
+    /// @dev Neither the factory owner nor any PaymentRails owner.
+    address internal stranger;
     address internal paymentRails;
     address internal keeper;
     /// @dev A second PaymentRails, also owned by this contract, for per-rails registry tests.
     address internal otherPaymentRails;
-    /// @dev A real PaymentRails owned by someone else, for the L-01 negative cases.
+    /// @dev A real PaymentRails owned by someone other than the factory owner. Creation is gated on
+    ///      the factory owner, not the PaymentRails owner, so this must still be creatable.
     address internal foreignPaymentRails;
     address internal foreignRailsOwner;
 
@@ -49,11 +52,10 @@ abstract contract AtumModuleFactoryBase is Test {
     function setUp() public virtual {
         owner = makeAddr("owner");
         keeper = makeAddr("keeper");
+        stranger = makeAddr("stranger");
 
-        // A REAL PaymentRails, owned by this test contract. Certora L-01 restricts module
-        // creation to the PaymentRails owner, so the factory now reads `owner()` off this
-        // address -- it can no longer be a bare `makeAddr`. Owning it here keeps every existing
-        // unpranked `factory.create(...)` call valid, which is what the old EOA stood in for.
+        // A REAL PaymentRails: creation requires the rails to be on PaymentRailsFactory's list,
+        // so it can no longer be a bare `makeAddr`.
         paymentRails = address(new PaymentRails(address(this)));
 
         otherPaymentRails = address(new PaymentRails(address(this)));
@@ -69,6 +71,8 @@ abstract contract AtumModuleFactoryBase is Test {
         railsFactory.register(foreignPaymentRails);
 
         permit2 = new MockPermit2(PERMIT2_DOMAIN_SEPARATOR);
-        factory = new AtumModuleFactory(address(permit2), railsFactory);
+        // This test contract owns the factory (Certora L-01), so every unpranked
+        // `factory.create(...)` call is made by the factory owner.
+        factory = new AtumModuleFactory(address(this), address(permit2), railsFactory);
     }
 }

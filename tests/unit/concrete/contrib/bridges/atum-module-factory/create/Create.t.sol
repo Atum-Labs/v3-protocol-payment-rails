@@ -8,12 +8,39 @@ import { PaymentRails } from "../../../../../../../src/core/PaymentRails.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { Vm } from "forge-std/src/Vm.sol";
 
-/// @dev Copies `owner()` and nothing else. Not on the PaymentRailsFactory list.
+/// @dev A contract exposing `owner()` like a PaymentRails would. Not on the PaymentRailsFactory list.
 contract OwnerReturningLookalike is Ownable {
     constructor(address initialOwner) Ownable(initialOwner) { }
 }
 
 contract Create_AtumModuleFactory_Test is AtumModuleFactoryBase {
+    /// L-01. Creation was permissionless, so anyone could deploy a genuine factory module naming
+    /// a victim's PaymentRails -- making themselves owner and keeper -- and have it recorded
+    /// against the victim in the registry, passing `isDeployedModule` and appearing in
+    /// `getModulesForPaymentRails(victim)`. Creation is now restricted to the factory owner.
+    function test_RevertWhen_CallerIsNotFactoryOwner() external {
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        factory.create(owner, paymentRails, keeper);
+    }
+
+    /// Owning the PaymentRails no longer grants creation: `owner()` on an arbitrary contract is
+    /// not a trustworthy answer, so the factory does not ask it.
+    function test_RevertWhen_CallerIsPaymentRailsOwnerButNotFactoryOwner() external {
+        vm.prank(foreignRailsOwner);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, foreignRailsOwner));
+        factory.create(owner, foreignPaymentRails, keeper);
+    }
+
+    function test_WhenUnauthorized_RegistryStaysEmpty() external {
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        factory.create(owner, foreignPaymentRails, keeper);
+
+        assertEq(factory.getModuleCount(), 0);
+        assertEq(factory.getModulesForPaymentRails(foreignPaymentRails).length, 0);
+    }
+
     function test_RevertWhen_OwnerIsZeroAddress() external {
         vm.expectRevert(Errors.AtumModuleFactory_ZeroOwner.selector);
         factory.create(address(0), paymentRails, keeper);
@@ -134,25 +161,13 @@ contract Create_AtumModuleFactory_Test is AtumModuleFactoryBase {
         assertTrue(found, "AtumModuleCreated not emitted");
     }
 
-    /// L-01. Creation was permissionless, so anyone could deploy a genuine factory module naming
-    /// a victim's PaymentRails -- making themselves owner and keeper -- and have it recorded
-    /// against the victim in the registry, passing `isDeployedModule` and appearing in
-    /// `getModulesForPaymentRails(victim)`.
-    function test_Create_RevertsWhenCallerIsNotPaymentRailsOwner() external {
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Errors.AtumModuleFactory_NotPaymentRailsOwner.selector, address(this), foreignRailsOwner
-            )
-        );
-        factory.create(owner, foreignPaymentRails, keeper);
-    }
-
-    /// The rails owner themselves is still free to create, which is the flow the check preserves.
-    function test_Create_SucceedsForThePaymentRailsOwner() external {
-        vm.prank(foreignRailsOwner);
-        address module = factory.create(owner, foreignPaymentRails, keeper);
+    /// The factory owner deploys on the PaymentRails owner's behalf, so it need not own the rails.
+    function test_WhenCallerIsFactoryOwner_ShouldNotRequireOwningThePaymentRails() external {
+        address module = factory.create(foreignRailsOwner, foreignPaymentRails, keeper);
 
         assertTrue(factory.isDeployedModule(module));
+        assertEq(AtumModule(module).owner(), foreignRailsOwner);
+        assertEq(AtumModule(module).paymentRails(), foreignPaymentRails);
         assertEq(factory.getModulesForPaymentRails(foreignPaymentRails).length, 1);
     }
 
@@ -163,8 +178,8 @@ contract Create_AtumModuleFactory_Test is AtumModuleFactoryBase {
         factory.create(owner, eoa, keeper);
     }
 
-    /// A contract that returns the caller from `owner()` still fails unless PaymentRailsFactory
-    /// deployed it. Copying the function is not enough to get onto that list.
+    /// Even from the factory owner, a contract that looks like a PaymentRails fails unless
+    /// PaymentRailsFactory deployed it. Copying functions is not enough to get onto that list.
     function test_Create_RevertsWhenPaymentRailsIsALookalike() external {
         address lookalike = address(new OwnerReturningLookalike(address(this)));
         vm.expectRevert(abi.encodeWithSelector(Errors.AtumModuleFactory_UnknownPaymentRails.selector, lookalike));
