@@ -2,9 +2,11 @@
 pragma solidity ^0.8.29;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 
 /// @dev Controllable router mock for DexSwapModule unit tests.
-/// Implements the Uniswap V3 `exactInputSingle` interface that DexSwapModule calls internally.
+/// Mirrors the Uniswap SwapRouter02 surface DexSwapModule calls: `exactInputSingle`, the
+/// deadline-checking `multicall`, and `factory()`.
 /// Simulates a DEX router that can succeed, fail, partially fill, or produce zero output.
 contract MockRouter {
     bool public shouldRevert;
@@ -17,7 +19,6 @@ contract MockRouter {
         address tokenOut;
         uint24 fee;
         address recipient;
-        uint256 deadline;
         uint256 amountIn;
         uint256 amountOutMinimum;
         uint160 sqrtPriceLimitX96;
@@ -39,7 +40,22 @@ contract MockRouter {
         pullAmountOverride = _amount;
     }
 
-    /// @dev Uniswap V3 exactInputSingle — the only function DexSwapModule calls.
+    /// @dev Any contract address satisfies the module's constructor probe.
+    function factory() external view returns (address) {
+        return address(this);
+    }
+
+    /// @dev SwapRouter02's deadline-checked batch entry point — the function the module calls.
+    /// Delegatecall keeps `msg.sender` equal to the module, as the real router does.
+    function multicall(uint256 deadline, bytes[] calldata data) external payable returns (bytes[] memory results) {
+        require(block.timestamp <= deadline, "Transaction too old");
+        results = new bytes[](data.length);
+        for (uint256 i = 0; i < data.length; ++i) {
+            results[i] = Address.functionDelegateCall(address(this), data[i]);
+        }
+    }
+
+    /// @dev Uniswap V3 exactInputSingle — invoked through `multicall`.
     /// Pulls sellToken from caller (module), sends buyToken to recipient (module, then forwarded).
     function exactInputSingle(ExactInputSingleParams calldata params) external returns (uint256 amountOut) {
         if (shouldRevert) revert("MockRouter: forced revert");

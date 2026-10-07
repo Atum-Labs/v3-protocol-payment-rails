@@ -144,6 +144,21 @@ contract CowSwapModule_Validate_Test is CowSwapModuleBase {
     // when validity duration is zero
     // -----------------------------------------------------------------------
 
+    function test_WhenMaxStalenessIsZero_ReturnsFalse() external view {
+        bytes memory params = _buildParams(
+            address(buyToken),
+            DEFAULT_SLIPPAGE_BPS,
+            address(sellFeed),
+            address(buyFeed),
+            0,
+            DEFAULT_VALIDITY,
+            DEFAULT_APP_DATA
+        );
+        (bool isValid, string memory reason) = module.validate(address(sellToken), DEFAULT_SELL_AMOUNT, params);
+        assertFalse(isValid);
+        assertEq(reason, "Zero max staleness");
+    }
+
     function test_WhenValidityDurationIsZero_ReturnsFalse() external view {
         bytes memory params = _buildParams(
             address(buyToken),

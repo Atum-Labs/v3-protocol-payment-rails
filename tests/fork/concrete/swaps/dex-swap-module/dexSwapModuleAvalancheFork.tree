@@ -1,0 +1,32 @@
+DexSwapModule_AvalancheFork
+├── router wiring
+│   ├── it should store SwapRouter02 as the immutable router
+│   ├── it should confirm the router reports the Avalanche Uniswap V3 factory
+│   ├── given the Ethereum SwapRouter address
+│   │   ├── it should have no code on Avalanche
+│   │   └── it should revert with DexSwapModule_RouterNotContract
+│   └── given an expired deadline
+│       └── it should revert the router multicall with "Transaction too old"
+├── swap WAVAX → USDC
+│   ├── given PaymentRails configured for WAVAX → USDC via executeAction
+│   │   ├── it should succeed against the real SwapRouter02
+│   │   ├── it should decrease PaymentRails WAVAX by sell amount
+│   │   ├── it should receive USDC at or above the oracle floor
+│   │   └── it should leave module with zero balances and zero allowances
+│   ├── given a direct module call from PaymentRails
+│   │   ├── it should return success with USDC as outputToken
+│   │   └── it should report a non-zero amountOut
+│   └── given a larger size (50 WAVAX)
+│       ├── it should succeed
+│       └── it should receive USDC at or above the oracle floor
+├── swap USDC → WAVAX
+│   └── given PaymentRails configured for USDC → WAVAX via executeAction
+│       ├── it should succeed
+│       ├── it should decrease PaymentRails USDC by sell amount
+│       └── it should receive WAVAX at or above the oracle floor
+└── oracle enforcement
+    ├── given zero slippage tolerance
+    │   ├── it should fail gracefully instead of settling below the floor
+    │   └── it should return the sell token to PaymentRails
+    ├── it should estimate output within a plausible live price band
+    └── it should validate successfully with Avalanche feeds

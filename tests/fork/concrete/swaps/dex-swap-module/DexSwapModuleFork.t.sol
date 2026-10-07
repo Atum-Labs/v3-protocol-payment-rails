@@ -37,7 +37,9 @@ abstract contract DexSwapModuleForkBase is Test {
                                 MAINNET CONSTANTS
     //////////////////////////////////////////////////////////////////////////*/
 
-    address internal constant UNISWAP_V3_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    /// @dev Uniswap SwapRouter02 on Ethereum mainnet; the original SwapRouter uses an
+    /// incompatible `exactInputSingle` selector — see {ISwapRouter}.
+    address internal constant UNISWAP_V3_ROUTER = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
 
     address internal constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address internal constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;

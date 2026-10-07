@@ -5,6 +5,8 @@ import { DexSwapModuleBase } from "../DexSwapModuleBase.t.sol";
 import { DexSwapModule } from "../../../../../../src/modules/swaps/DexSwapModule.sol";
 import { Errors } from "../../../../../../src/libraries/Errors.sol";
 import { MockChainlinkAggregator } from "../../../../../shared/mocks/MockChainlinkAggregator.sol";
+import { MockERC20 } from "../../../../../shared/mocks/MockERC20.sol";
+import { PermissiveFallbackRouter, EoaFactoryRouter } from "../../../../../shared/mocks/NonUniswapRouter.sol";
 
 /// @notice Unit tests for DexSwapModule constructor
 /// @dev Tree: tests/unit/concrete/swaps/dex-swap-module/constructor/constructor.tree
@@ -18,6 +20,27 @@ contract DexSwapModule_Constructor_Test is DexSwapModuleBase {
         address noCode = makeAddr("noCode");
         vm.expectRevert(abi.encodeWithSelector(Errors.DexSwapModule_RouterNotContract.selector, noCode));
         new DexSwapModule(noCode, address(0), 0);
+    }
+
+    function test_RevertWhen_RouterDoesNotExposeFactory() external {
+        // Has code, but no `factory()`: the probe call reverts.
+        MockERC20 notARouter = new MockERC20("Not A Router", "NAR");
+        vm.expectRevert(abi.encodeWithSelector(Errors.DexSwapModule_RouterNotUniswap.selector, address(notARouter)));
+        new DexSwapModule(address(notARouter), address(0), 0);
+    }
+
+    function test_RevertWhen_RouterSwallowsCallsWithEmptyReturnData() external {
+        // A permissive fallback answers `factory()` with no data instead of reverting, so
+        // `code.length != 0` alone would accept it.
+        PermissiveFallbackRouter trap = new PermissiveFallbackRouter();
+        vm.expectRevert(abi.encodeWithSelector(Errors.DexSwapModule_RouterNotUniswap.selector, address(trap)));
+        new DexSwapModule(address(trap), address(0), 0);
+    }
+
+    function test_RevertWhen_RouterFactoryHasNoCode() external {
+        EoaFactoryRouter fake = new EoaFactoryRouter(makeAddr("eoaFactory"));
+        vm.expectRevert(abi.encodeWithSelector(Errors.DexSwapModule_RouterNotUniswap.selector, address(fake)));
+        new DexSwapModule(address(fake), address(0), 0);
     }
 
     function test_WhenRouterIsValid_SetsImmutableRouter() external view {

@@ -1,0 +1,14 @@
+CowSwapModuleFactoryL2SequencerFork (Base mainnet)
+├── when the sequencer uptime feed is Base's real Chainlink feed
+│   ├── it should deploy the factory
+│   ├── it should set the sequencer uptime feed
+│   ├── it should set the sequencer grace period
+│   └── it should set the cow settlement
+├── when the sequencer uptime feed is an EOA
+│   └── it should revert with CowSwapModuleFactory_SequencerFeedNotContract
+├── when a module is created
+│   ├── it should wire the real sequencer feed into the module
+│   └── it should wire the real sequencer feed through createDeterministic
+└── when the module reads the live feed
+    ├── it should validate an order while the sequencer is up
+    └── it should reject the order while the grace period has not elapsed

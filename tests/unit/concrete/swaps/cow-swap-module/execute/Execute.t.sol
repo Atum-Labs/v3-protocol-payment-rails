@@ -228,6 +228,22 @@ contract CowSwapModule_Execute_Test is CowSwapModuleBase {
     // when validity duration is zero
     // -----------------------------------------------------------------------
 
+    function test_WhenMaxStalenessIsZero_ReturnsFailedResult() external {
+        bytes memory params = _buildParams(
+            address(buyToken),
+            DEFAULT_SLIPPAGE_BPS,
+            address(sellFeed),
+            address(buyFeed),
+            0,
+            DEFAULT_VALIDITY,
+            DEFAULT_APP_DATA
+        );
+        DataTypes.ExecutionResult memory result =
+            paymentRails.initiateSwap(address(sellToken), DEFAULT_SELL_AMOUNT, params);
+        assertFalse(result.success);
+        assertEq(result.failureReason, "Zero max staleness");
+    }
+
     function test_WhenValidityDurationIsZero_ReturnsFailedResult() external {
         bytes memory params = _buildParams(
             address(buyToken),
@@ -701,7 +717,7 @@ contract CowSwapModule_Execute_Test is CowSwapModuleBase {
     /// @dev Certora L-02: oracle reads must fail during grace period.
     function test_Execute_WhenSequencerInGracePeriod_ReturnsOracleUnavailable() external {
         MockChainlinkAggregator seqFeed = new MockChainlinkAggregator(int256(0), 0);
-        seqFeed.setUpdatedAt(block.timestamp - 1800); // up 30 min ago, grace = 1 hour
+        seqFeed.setStartedAt(block.timestamp - 1800); // up 30 min ago, grace = 1 hour
         MockPaymentRails l2Rails = new MockPaymentRails();
         CowSwapModule l2Module =
             new CowSwapModule(address(cowSettlement), address(this), address(l2Rails), address(seqFeed), 3600);
@@ -717,7 +733,7 @@ contract CowSwapModule_Execute_Test is CowSwapModuleBase {
     /// @dev Certora L-02: oracle reads succeed after grace period expires.
     function test_Execute_WhenSequencerUpPastGracePeriod_Succeeds() external {
         MockChainlinkAggregator seqFeed = new MockChainlinkAggregator(int256(0), 0);
-        seqFeed.setUpdatedAt(block.timestamp - 7200); // up 2 hours ago, grace = 1 hour
+        seqFeed.setStartedAt(block.timestamp - 7200); // up 2 hours ago, grace = 1 hour
         MockPaymentRails l2Rails = new MockPaymentRails();
         CowSwapModule l2Module =
             new CowSwapModule(address(cowSettlement), address(this), address(l2Rails), address(seqFeed), 3600);
@@ -742,6 +758,60 @@ contract CowSwapModule_Execute_Test is CowSwapModuleBase {
         DataTypes.ExecutionResult memory result =
             l2Rails.initiateSwap(address(sellToken), DEFAULT_SELL_AMOUNT, _buildDefaultParams());
         assertFalse(result.success, "should fail when sequencer feed reverts");
+        assertEq(result.failureReason, "Oracle price unavailable");
+    }
+
+    /// @dev The grace period must be measured from `startedAt` (tuple position 3, when the sequencer
+    /// last changed status), not from `updatedAt` (position 4, the last routine feed write). On
+    /// Base's live feed these run weeks apart: sampled across 31 days, `startedAt` stayed pinned at
+    /// 1_782_491_507 while `updatedAt` advanced on every write. Reading position 4 would block every
+    /// order for a full grace period after each write, with no outage.
+    function test_Execute_WhenStartedAtAndUpdatedAtDiverge_MeasuresFromStartedAt() external {
+        MockChainlinkAggregator seqFeed = new MockChainlinkAggregator(int256(0), 0);
+        seqFeed.setStartedAt(block.timestamp - 30 days); // sequencer up for 30 days
+        seqFeed.setUpdatedAt(block.timestamp - 60); // feed written 60s ago, grace = 1 hour
+        MockPaymentRails l2Rails = new MockPaymentRails();
+        CowSwapModule l2Module =
+            new CowSwapModule(address(cowSettlement), address(this), address(l2Rails), address(seqFeed), 3600);
+        l2Rails.setModule(address(l2Module));
+        sellToken.mint(address(l2Rails), DEFAULT_SELL_AMOUNT);
+
+        DataTypes.ExecutionResult memory result =
+            l2Rails.initiateSwap(address(sellToken), DEFAULT_SELL_AMOUNT, _buildDefaultParams());
+        assertTrue(result.success, "grace period must key off startedAt, not updatedAt");
+    }
+
+    /// @dev An uninitialized round reports startedAt == 0, making `block.timestamp - startedAt` span
+    /// the whole unix epoch, which clears any grace period.
+    function test_Execute_WhenSequencerRoundUninitialized_ReturnsOracleUnavailable() external {
+        MockChainlinkAggregator seqFeed = new MockChainlinkAggregator(int256(0), 0);
+        seqFeed.setStartedAt(0);
+        MockPaymentRails l2Rails = new MockPaymentRails();
+        CowSwapModule l2Module =
+            new CowSwapModule(address(cowSettlement), address(this), address(l2Rails), address(seqFeed), 3600);
+        l2Rails.setModule(address(l2Module));
+        sellToken.mint(address(l2Rails), DEFAULT_SELL_AMOUNT);
+
+        DataTypes.ExecutionResult memory result =
+            l2Rails.initiateSwap(address(sellToken), DEFAULT_SELL_AMOUNT, _buildDefaultParams());
+        assertFalse(result.success, "uninitialized round must not clear the grace period");
+        assertEq(result.failureReason, "Oracle price unavailable");
+    }
+
+    /// @dev A feed ahead of block.timestamp would underflow. The subtraction sits in the try's
+    /// success body, so the panic escapes the adjacent catch instead of failing closed.
+    function test_Execute_WhenSequencerReportsFutureTimestamp_ReturnsOracleUnavailable() external {
+        MockChainlinkAggregator seqFeed = new MockChainlinkAggregator(int256(0), 0);
+        seqFeed.setStartedAt(block.timestamp + 1 hours);
+        MockPaymentRails l2Rails = new MockPaymentRails();
+        CowSwapModule l2Module =
+            new CowSwapModule(address(cowSettlement), address(this), address(l2Rails), address(seqFeed), 3600);
+        l2Rails.setModule(address(l2Module));
+        sellToken.mint(address(l2Rails), DEFAULT_SELL_AMOUNT);
+
+        DataTypes.ExecutionResult memory result =
+            l2Rails.initiateSwap(address(sellToken), DEFAULT_SELL_AMOUNT, _buildDefaultParams());
+        assertFalse(result.success, "future timestamp must fail closed, not panic");
         assertEq(result.failureReason, "Oracle price unavailable");
     }
 

@@ -113,6 +113,22 @@ contract DexSwapModule_Validate_Test is DexSwapModuleBase {
         assertEq(reason, "Missing buy token price feed", "reason");
     }
 
+    function test_WhenMaxStalenessIsZero_ReturnsFalse() external {
+        bytes memory params = _buildParamsCustom(
+            address(buyToken),
+            DEFAULT_FEE,
+            DEFAULT_SLIPPAGE_BPS,
+            address(sellFeed),
+            address(buyFeed),
+            0,
+            DEFAULT_SWAP_DEADLINE
+        );
+        vm.prank(address(paymentRails));
+        (bool isValid, string memory reason) = module.validate(address(sellToken), DEFAULT_SELL_AMOUNT, params);
+        assertFalse(isValid, "isValid");
+        assertEq(reason, "Zero max staleness", "reason");
+    }
+
     function test_WhenSwapDeadlineSecondsIsZero_ReturnsFalse() external {
         bytes memory params = _buildParamsCustom(
             address(buyToken),

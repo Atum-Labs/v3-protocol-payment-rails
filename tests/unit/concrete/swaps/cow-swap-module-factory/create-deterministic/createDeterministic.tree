@@ -1,0 +1,27 @@
+CowSwapModuleFactory_CreateDeterministic
+├── when the caller is not the factory owner
+│   ├── it should revert with OwnableUnauthorizedAccount
+│   └── it should leave the predicted address unoccupied
+├── when owner is zero address
+│   └── it should revert with CowSwapModuleFactory_ZeroOwner
+├── when paymentRails is zero address
+│   └── it should revert with CowSwapModuleFactory_ZeroPaymentRails
+├── when paymentRails has no code
+│   └── it should revert with CowSwapModuleFactory_PaymentRailsNotContract
+├── when the caller is the factory owner
+│   ├── it should deploy a new CowSwapModule contract
+│   ├── it should set the owner on the deployed module
+│   ├── it should wire the module to the PaymentRails
+│   ├── it should deploy to the predicted address
+│   ├── it should register the module in the factory
+│   └── it should emit a CowSwapModuleCreated event
+├── when the same salt is reused with the same params
+│   └── it should revert
+├── when different salts are used
+│   └── it should deploy to different addresses
+├── when the same salt is used with different owners
+│   └── it should deploy to different addresses
+├── when the same salt is used with different paymentRails
+│   └── it should deploy to different addresses
+└── when fuzzing the prediction
+    └── it should match the deployed address

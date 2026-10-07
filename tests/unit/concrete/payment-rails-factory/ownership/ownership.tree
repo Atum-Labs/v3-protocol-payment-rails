@@ -1,0 +1,13 @@
+PaymentRailsFactory_Ownership
+├── when initial owner is zero address
+│   └── it should revert with OwnableInvalidOwner
+├── when initial owner is valid
+│   ├── it should set the owner
+│   └── it should not make the deployer the owner
+├── when renounceOwnership is called
+│   └── it should revert with PaymentRailsFactory_OwnershipCannotBeRenounced
+└── when ownership is transferred
+    ├── it should not change the owner until accepted
+    ├── it should set and then clear the pending owner
+    ├── it should let the new owner create instances
+    └── it should still reject a non-owner caller

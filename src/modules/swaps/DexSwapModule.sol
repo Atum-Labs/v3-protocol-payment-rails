@@ -18,6 +18,7 @@ import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.s
 /// @author Credit Cooperative
 /// @notice Oracle-only synchronous swap module — the permissionless executor controls nothing.
 /// @dev See {IDexSwapModule} for the full interface. Fee-on-transfer tokens are NOT supported.
+/// @dev Requires Uniswap SwapRouter02 — see {ISwapRouter}.
 contract DexSwapModule is IDexSwapModule, ActionModuleBase, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -38,12 +39,20 @@ contract DexSwapModule is IDexSwapModule, ActionModuleBase, ReentrancyGuard {
                                   CONSTRUCTOR
     //////////////////////////////////////////////////////////////////////////*/
 
-    /// @param _router Uniswap V3 SwapRouter address (must be a contract).
+    /// @param _router Uniswap V3 SwapRouter02 address; must expose `factory()`. Chain-specific.
     /// @param _sequencerUptimeFeed Chainlink L2 sequencer uptime feed; address(0) on L1.
     /// @param _sequencerGracePeriod Seconds after sequencer recovery before trusting oracles.
     constructor(address _router, address _sequencerUptimeFeed, uint256 _sequencerGracePeriod) {
         if (_router == address(0)) revert Errors.DexSwapModule_ZeroRouter();
         if (_router.code.length == 0) revert Errors.DexSwapModule_RouterNotContract(_router);
+
+        // Code size alone does not prove a router: a foreign chain's router address may hold an
+        // unrelated contract that answers calls without reverting.
+        (bool probeOk, bytes memory probeData) = _router.staticcall(abi.encodeCall(ISwapRouter.factory, ()));
+        if (!probeOk || probeData.length != 32) revert Errors.DexSwapModule_RouterNotUniswap(_router);
+        address uniswapFactory = abi.decode(probeData, (address));
+        if (uniswapFactory.code.length == 0) revert Errors.DexSwapModule_RouterNotUniswap(_router);
+
         router = _router;
         sequencerUptimeFeed = _sequencerUptimeFeed;
         sequencerGracePeriod = _sequencerGracePeriod;
@@ -183,9 +192,26 @@ contract DexSwapModule is IDexSwapModule, ActionModuleBase, ReentrancyGuard {
         if (cfg.maxAmount != 0 && amount > cfg.maxAmount) return (false, "Exceeds max swap amount", cfg);
         if (cfg.sellTokenPriceFeed == address(0)) return (false, "Missing sell token price feed", cfg);
         if (cfg.buyTokenPriceFeed == address(0)) return (false, "Missing buy token price feed", cfg);
+        if (cfg.maxStaleness == 0) return (false, "Zero max staleness", cfg);
         if (cfg.swapDeadlineSeconds == 0) return (false, "Zero swap deadline", cfg);
 
         return (true, "", cfg);
+    }
+
+    /// @dev Returns false when the L2 sequencer is down or still inside its recovery grace period.
+    function _isSequencerHealthy() private view returns (bool) {
+        if (sequencerUptimeFeed == address(0)) return true;
+
+        try IChainlinkAggregatorV3(sequencerUptimeFeed).latestRoundData() returns (
+            uint80, int256 answer, uint256 startedAt, uint256, uint80
+        ) {
+            // answer == 0 → sequencer is up; answer == 1 → sequencer is down
+            if (answer != 0) return false;
+            if (startedAt == 0 || startedAt > block.timestamp) return false;
+            return block.timestamp - startedAt >= sequencerGracePeriod;
+        } catch {
+            return false;
+        }
     }
 
     /// @dev Validates Chainlink price feed; checks L2 sequencer uptime when configured.
@@ -197,23 +223,14 @@ contract DexSwapModule is IDexSwapModule, ActionModuleBase, ReentrancyGuard {
         view
         returns (bool ok, uint256 price, uint8 feedDecimals)
     {
-        if (sequencerUptimeFeed != address(0)) {
-            try IChainlinkAggregatorV3(sequencerUptimeFeed).latestRoundData() returns (
-                uint80, int256 answer, uint256, uint256 startedAt, uint80
-            ) {
-                // answer == 0 → sequencer is up; answer == 1 → sequencer is down
-                if (answer != 0) return (false, 0, 0);
-                if (block.timestamp - startedAt < sequencerGracePeriod) return (false, 0, 0);
-            } catch {
-                return (false, 0, 0);
-            }
-        }
+        if (!_isSequencerHealthy()) return (false, 0, 0);
 
         try IChainlinkAggregatorV3(feed).latestRoundData() returns (
             uint80, int256 answer, uint256, uint256 updatedAt, uint80
         ) {
             if (answer <= 0) return (false, 0, 0);
             if (uint256(answer) > type(uint128).max) return (false, 0, 0);
+            if (updatedAt > block.timestamp) return (false, 0, 0);
             if (block.timestamp - updatedAt > maxStaleness) return (false, 0, 0);
             try IChainlinkAggregatorV3(feed).decimals() returns (uint8 dec) {
                 return (true, uint256(answer), dec);
@@ -313,19 +330,23 @@ contract DexSwapModule is IDexSwapModule, ActionModuleBase, ReentrancyGuard {
 
         uint256 buyTokenBefore = IERC20(cfg.targetToken).balanceOf(address(this));
 
-        bytes memory swapCalldata = abi.encodeCall(
+        // SwapRouter02 has no `deadline` param; the multicall wrapper enforces it. Reverts inside
+        // the batch (e.g. `amountOutMinimum` not met) propagate out of `multicall`.
+        bytes[] memory swapBatch = new bytes[](1);
+        swapBatch[0] = abi.encodeCall(
             ISwapRouter.exactInputSingle,
             (ISwapRouter.ExactInputSingleParams({
                     tokenIn: token,
                     tokenOut: cfg.targetToken,
                     fee: cfg.fee,
                     recipient: address(this),
-                    deadline: block.timestamp + cfg.swapDeadlineSeconds,
                     amountIn: amount,
                     amountOutMinimum: oracleFloor,
                     sqrtPriceLimitX96: 0
                 }))
         );
+        bytes memory swapCalldata =
+            abi.encodeCall(ISwapRouter.multicall, (block.timestamp + cfg.swapDeadlineSeconds, swapBatch));
 
         (ok,) = router.call(swapCalldata);
 

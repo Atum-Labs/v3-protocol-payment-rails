@@ -10,6 +10,13 @@ import { BaseScript } from "../Base.s.sol";
 /// @author Credit Cooperative
 /// @notice Deploys the DexSwapModule. Stateless — a single instance can be shared across PaymentRails.
 ///
+///      The router MUST be Uniswap SwapRouter02 for the target chain:
+///        ethereum / arbitrum / optimism / polygon  0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45
+///        base                                      0x2626664c2603336E57B271c5C0b26F421741e481
+///        avalanche                                 0xbb00FF08d01D300023C629E8fFfFcb65A5a578cE
+///
+///      `sequencerUptimeFeed` is address(0) on chains without a Chainlink sequencer uptime feed.
+///
 ///      Usage:
 ///        source .env && forge script scripts/solidity/deploy/DeployDexSwapModule.s.sol \
 ///          --sig "run(address,address,uint256)" <ROUTER> <SEQUENCER_FEED_OR_0x0> <GRACE_PERIOD> \

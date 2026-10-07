@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-import { IPaymentRailsFactory } from "../../../src/interfaces/IPaymentRailsFactory.sol";
-
 /// @dev Test stand-in for Credit Cooperative's PaymentRailsFactory registry.
 ///      `register` is open here. On the production factory only the owner can add an instance.
-contract MockPaymentRailsFactory is IPaymentRailsFactory {
+contract MockPaymentRailsFactory {
     mapping(address instance => bool deployed) private _isDeployedInstance;
 
     function register(address instance) external {

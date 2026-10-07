@@ -13,6 +13,8 @@ DexSwapModule::validate
 │   └── it should return false with missing sell token price feed
 ├── when buy token price feed is zero address
 │   └── it should return false with missing buy token price feed
+├── when max staleness is zero
+│   └── it should return false with zero max staleness
 ├── when swap deadline seconds is zero
 │   └── it should return false with zero swap deadline
 ├── when oracle price is unavailable

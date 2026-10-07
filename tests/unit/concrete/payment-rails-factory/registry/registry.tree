@@ -1,0 +1,12 @@
+PaymentRailsFactory_Registry
+├── given no instances deployed
+│   ├── it should return false for isDeployedInstance
+│   ├── it should return empty array for getDeployedInstances
+│   └── it should return zero for getInstanceCount
+├── given instances deployed
+│   ├── it should return true for deployed instances
+│   ├── it should return false for non-deployed addresses
+│   ├── it should return correct array for getDeployedInstances
+│   └── it should return correct count for getInstanceCount
+└── given mix of CREATE and CREATE2 deployments
+    └── it should track both in the same registry

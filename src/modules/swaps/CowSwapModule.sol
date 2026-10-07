@@ -386,6 +386,9 @@ contract CowSwapModule is ICowSwapModule, ActionModuleBase, Ownable2Step, Reentr
         if (swapParams.buyTokenPriceFeed == address(0)) {
             return (false, "Missing buy token price feed", swapParams, 0);
         }
+        if (swapParams.maxStaleness == 0) {
+            return (false, "Zero max staleness", swapParams, 0);
+        }
         if (swapParams.validityDuration == 0) {
             return (false, "Zero validity duration", swapParams, 0);
         }
@@ -398,6 +401,22 @@ contract CowSwapModule is ICowSwapModule, ActionModuleBase, Ownable2Step, Reentr
         return (true, "", swapParams, uint32(rawValidTo));
     }
 
+    /// @dev Returns false when the L2 sequencer is down or still inside its recovery grace period.
+    function _isSequencerHealthy() private view returns (bool) {
+        if (sequencerUptimeFeed == address(0)) return true;
+
+        try IChainlinkAggregatorV3(sequencerUptimeFeed).latestRoundData() returns (
+            uint80, int256 answer, uint256 startedAt, uint256, uint80
+        ) {
+            // answer == 0 → sequencer is up; answer == 1 → sequencer is down
+            if (answer != 0) return false;
+            if (startedAt == 0 || startedAt > block.timestamp) return false;
+            return block.timestamp - startedAt >= sequencerGracePeriod;
+        } catch {
+            return false;
+        }
+    }
+
     /// @dev Validates Chainlink price feed; checks L2 sequencer uptime when configured.
     function _getOraclePrice(
         address feed,
@@ -407,23 +426,14 @@ contract CowSwapModule is ICowSwapModule, ActionModuleBase, Ownable2Step, Reentr
         view
         returns (bool ok, uint256 price, uint8 feedDecimals)
     {
-        if (sequencerUptimeFeed != address(0)) {
-            try IChainlinkAggregatorV3(sequencerUptimeFeed).latestRoundData() returns (
-                uint80, int256 answer, uint256, uint256 startedAt, uint80
-            ) {
-                // answer == 0 → sequencer is up; answer == 1 → sequencer is down
-                if (answer != 0) return (false, 0, 0);
-                if (block.timestamp - startedAt < sequencerGracePeriod) return (false, 0, 0);
-            } catch {
-                return (false, 0, 0);
-            }
-        }
+        if (!_isSequencerHealthy()) return (false, 0, 0);
 
         try IChainlinkAggregatorV3(feed).latestRoundData() returns (
             uint80, int256 answer, uint256, uint256 updatedAt, uint80
         ) {
             if (answer <= 0) return (false, 0, 0);
             if (uint256(answer) > type(uint128).max) return (false, 0, 0);
+            if (updatedAt > block.timestamp) return (false, 0, 0);
             if (block.timestamp - updatedAt > maxStaleness) return (false, 0, 0);
             try IChainlinkAggregatorV3(feed).decimals() returns (uint8 dec) {
                 return (true, uint256(answer), dec);

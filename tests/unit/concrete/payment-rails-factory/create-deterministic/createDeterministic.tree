@@ -1,0 +1,17 @@
+PaymentRailsFactory_CreateDeterministic
+├── when caller is not the factory owner
+│   └── it should revert with OwnableUnauthorizedAccount
+├── when owner is zero address
+│   └── it should revert with PaymentRailsFactory_ZeroOwner
+├── when owner is valid address
+│   ├── it should deploy a new PaymentRails contract
+│   ├── it should set the owner on the deployed PaymentRails
+│   ├── it should deploy to the predicted address
+│   ├── it should register the instance in the factory
+│   ├── it should emit a PaymentRailsCreated event
+│   └── when same salt is reused with same owner
+│       └── it should revert
+├── when different salts are used with the same owner
+│   └── it should deploy to different addresses
+└── when same salt is used with different owners
+    └── it should deploy to different addresses

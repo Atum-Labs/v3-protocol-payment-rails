@@ -7,6 +7,7 @@ contract MockChainlinkAggregator {
     int256 private _answer;
     uint8 private _decimals;
     uint256 private _updatedAt;
+    uint256 private _startedAt;
     uint80 private _roundId;
     bool private _shouldRevert;
 
@@ -14,6 +15,9 @@ contract MockChainlinkAggregator {
         _answer = answer_;
         _decimals = decimals_;
         _updatedAt = block.timestamp;
+        // Defaults equal so existing price-feed tests are unaffected. A sequencer uptime feed keeps
+        // these apart: startedAt is pinned to the last status change, updatedAt moves on every write.
+        _startedAt = block.timestamp;
         _roundId = 1;
     }
 
@@ -27,6 +31,12 @@ contract MockChainlinkAggregator {
 
     function setUpdatedAt(uint256 updatedAt_) external {
         _updatedAt = updatedAt_;
+    }
+
+    /// @dev Tuple position 3. On an L2 sequencer uptime feed this is when the sequencer last
+    /// changed status, which is what a grace period must be measured from.
+    function setStartedAt(uint256 startedAt_) external {
+        _startedAt = startedAt_;
     }
 
     function setRoundId(uint80 roundId_) external {
@@ -48,6 +58,6 @@ contract MockChainlinkAggregator {
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
     {
         require(!_shouldRevert, "MockChainlinkAggregator: forced revert");
-        return (_roundId, _answer, _updatedAt, _updatedAt, _roundId);
+        return (_roundId, _answer, _startedAt, _updatedAt, _roundId);
     }
 }

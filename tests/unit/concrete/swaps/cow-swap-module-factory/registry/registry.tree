@@ -1,0 +1,17 @@
+CowSwapModuleFactory_Registry
+├── given no modules deployed
+│   ├── it should return false from isDeployedModule
+│   ├── it should return an empty array from getDeployedModules
+│   ├── it should return zero from getModuleCount
+│   └── it should return an empty array from getModulesForPaymentRails
+├── given modules deployed
+│   ├── it should return true from isDeployedModule for a deployed module
+│   ├── it should return false from isDeployedModule for a non-deployed address
+│   ├── it should return the correct array from getDeployedModules
+│   ├── it should return the correct count from getModuleCount
+│   └── it should keep per-PaymentRails lookups separate
+├── given a mix of create and createDeterministic deployments
+│   └── it should track both in the same registry
+└── given a non-owner attempts to register a module
+    ├── it should register nothing even if the caller owns a PaymentRails
+    └── it should only list modules the factory owner deployed

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.29;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 import { DexSwapModule } from "../../../src/modules/swaps/DexSwapModule.sol";
 
 /// @dev Router that re-enters DexSwapModule.execute() during a swap.
@@ -22,7 +23,6 @@ contract ReentrantRouter {
         address tokenOut;
         uint24 fee;
         address recipient;
-        uint256 deadline;
         uint256 amountIn;
         uint256 amountOutMinimum;
         uint160 sqrtPriceLimitX96;
@@ -34,6 +34,21 @@ contract ReentrantRouter {
 
     function setOutputAmount(uint256 _amount) external {
         outputAmount = _amount;
+    }
+
+    /// @dev Satisfies the constructor's router probe.
+    function factory() external view returns (address) {
+        return address(this);
+    }
+
+    /// @dev SwapRouter02's deadline-checked batch entry point; the reentrancy attempt is made
+    /// from inside the delegatecalled swap.
+    function multicall(uint256 deadline, bytes[] calldata data) external payable returns (bytes[] memory results) {
+        require(block.timestamp <= deadline, "Transaction too old");
+        results = new bytes[](data.length);
+        for (uint256 i = 0; i < data.length; ++i) {
+            results[i] = Address.functionDelegateCall(address(this), data[i]);
+        }
     }
 
     function setReentrantCall(address token, uint256 amount, bytes calldata params) external {

@@ -46,7 +46,8 @@ contract DexSwapDryRun is Script, StdCheats {
     //////////////////////////////////////////////////////////////////////////*/
 
     // Uniswap V3 SwapRouter on Ethereum mainnet
-    address internal constant DEFAULT_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    /// @dev Uniswap SwapRouter02 on Ethereum mainnet; override with $ROUTER for other chains.
+    address internal constant DEFAULT_ROUTER = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
 
     address internal constant DEFAULT_SELL_TOKEN = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2; // WETH
     address internal constant DEFAULT_BUY_TOKEN = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48; // USDC

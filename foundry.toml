@@ -92,7 +92,7 @@
   # === MAINNETS ===
   ethereum = "${ETHEREUM_RPC_URL}"
   arbitrum = "https://arbitrum.llamarpc.com"
-  avalanche = "https://avalanche.public-rpc.com"
+  avalanche = "${AVALANCHE_RPC_URL}"
   base = "${BASE_RPC_URL}"
   bsc = "https://bsc-dataseed.binance.org"
   gnosis = "https://rpc.gnosischain.com"

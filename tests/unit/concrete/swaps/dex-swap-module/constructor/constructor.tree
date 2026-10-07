@@ -3,6 +3,12 @@ DexSwapModule::constructor
 │   └── it should revert with DexSwapModule_ZeroRouter
 ├── when router has no code (EOA)
 │   └── it should revert with DexSwapModule_RouterNotContract
+├── when router has code but does not expose factory()
+│   └── it should revert with DexSwapModule_RouterNotUniswap
+├── when router swallows calls and returns empty data
+│   └── it should revert with DexSwapModule_RouterNotUniswap
+├── when router factory() returns an address with no code
+│   └── it should revert with DexSwapModule_RouterNotUniswap
 └── when router is a valid contract
     ├── it should set the immutable router address
     ├── it should store sequencerUptimeFeed as immutable
