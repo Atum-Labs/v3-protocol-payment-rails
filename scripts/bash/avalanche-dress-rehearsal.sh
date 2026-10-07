@@ -32,7 +32,7 @@ cd "$ROOT"
 unset ETH_FROM
 export ALLOW_TEST_MNEMONIC=true
 
-RPC="${DR_RPC:-http://127.0.0.1:8546}"
+RPC="${DR_RPC:-http://127.0.0.1:${DR_PORT:-8546}}"
 CHAIN_ID=43114
 WORKDIR="${DR_WORKDIR:-$(mktemp -d)}"
 ANVIL_LOG="$WORKDIR/anvil.log"
@@ -268,13 +268,13 @@ send_reverts "configureToken from the keeper reverts" "$KEEPER" "$RAILS" \
 
 step "owner configures WAVAX -> USDC via DexSwapModule"
 send "$OWNER" "$RAILS" "configureToken(address,string,address,uint256,bytes,bool)" \
-  "$WAVAX" "SWAP" "$DEXSWAP" 0 "$DEX_PARAMS" true || bad "configure WAVAX"
-ok "WAVAX configured"
+  "$WAVAX" "SWAP" "$DEXSWAP" 0 "$DEX_PARAMS" true \
+  && ok "WAVAX configured" || bad "configure WAVAX"
 
 step "owner configures USDC -> CCTP bridge (domain $CCTP_DEST_DOMAIN, ${CCTP_MAX_FEE_BPS}bps, fast)"
 send "$OWNER" "$RAILS" "configureToken(address,string,address,uint256,bytes,bool)" \
-  "$USDC" "BRIDGE" "$BRIDGE" 0 "$BRIDGE_PARAMS" true || bad "configure USDC"
-ok "USDC configured"
+  "$USDC" "BRIDGE" "$BRIDGE" 0 "$BRIDGE_PARAMS" true \
+  && ok "USDC configured" || bad "configure USDC"
 
 step "§7.1 read the config back before funding"
 # DexSwapParams is fully static, so maxStaleness is word index 5 of moduleParams.
@@ -320,8 +320,8 @@ else
     "validate(address,uint256,bytes)(bool,string)" "$USDC" "100000000" "$BRIDGE_PARAMS" 2>&1 | head -3
   step "  moduleParams length: $(( (${#BRIDGE_PARAMS} - 2) / 2 )) bytes (module requires >= 224)"
 fi
-log_has "$TOKEN_MESSENGER_V2" "DepositForBurn(address,uint256,uint256,address,bytes32,uint32,bytes32,bytes32,uint256,uint32,bytes)" \
-  && ok "Circle's TokenMessengerV2 emitted DepositForBurn" || step "  (DepositForBurn signature varies by version — balance check below is authoritative)"
+log_has "$TOKEN_MESSENGER_V2" "DepositForBurn(address,uint256,address,bytes32,uint32,bytes32,bytes32,uint256,uint32,bytes)" \
+  && ok "Circle's TokenMessengerV2 emitted DepositForBurn" || bad "no DepositForBurn event from TokenMessengerV2"
 assert_eq "rails USDC debited" "$(python3 -c "print($USDC_BEFORE - $(bal $USDC $RAILS))")" "100000000"
 assert_eq "no USDC stranded in the bridge module" "$(bal $USDC $BRIDGE)" "0"
 
