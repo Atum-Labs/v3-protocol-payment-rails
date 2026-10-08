@@ -24,6 +24,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 [[ -f .env ]] && { set -a; . ./.env; set +a; }
 
+# This harness broadcasts from the test mnemonic against a local fork that reports chain id 1.
+# Base.s.sol refuses that on a non-local chain id unless told the target is a local node.
+export ALLOW_TEST_MNEMONIC=true
+
 RPC="${E2E_RPC:-http://127.0.0.1:8545}"
 WORKDIR="${E2E_WORKDIR:-$(mktemp -d)}"
 ANVIL_LOG="$WORKDIR/anvil.log"
@@ -222,7 +226,7 @@ phase "PHASE 2 — deployment (production deploy scripts)"
 step "factories for the per-instance contracts"
 RAILS_FACTORY=$(deploy_script scripts/solidity/deploy/DeployPaymentRailsFactory.s.sol --sig "run(address)" "$RAILS_OWNER")
 COW_FACTORY=$(deploy_script scripts/solidity/deploy/DeployCowSwapModuleFactory.s.sol \
-  --sig "run(address,uint256)" "0x0000000000000000000000000000000000000000" 0)
+  --sig "run(address,address,uint256)" "$RAILS_OWNER" "0x0000000000000000000000000000000000000000" 0)
 
 step "one shared instance each for the stateless modules"
 FWD_MODULE=$(deploy_script scripts/solidity/deploy/DeployForwardModule.s.sol)
@@ -243,6 +247,7 @@ done
 
 step "deployed contracts carry the chain config they were given"
 assert_eq "CowSwapModuleFactory.cowSettlement" "$(cu $COW_FACTORY 'cowSettlement()(address)')" "$GPV2_SETTLEMENT"
+assert_eq "CowSwapModuleFactory.owner" "$(cu $COW_FACTORY 'owner()(address)')" "$RAILS_OWNER"
 assert_eq "DexSwapModule.router" "$(cu $DEX_MODULE 'router()(address)')" "$UNISWAP_V3_ROUTER"
 assert_eq "CCTPBridgeModule.tokenMessenger" "$(cu $CCTP_MODULE 'tokenMessenger()(address)')" "$TOKEN_MESSENGER_V2"
 assert_eq "CCTPBridgeModule.usdc" "$(cu $CCTP_MODULE 'usdc()(address)')" "$USDC"
@@ -267,7 +272,9 @@ RAILS_B=$(addr_from_log "rails B" "$RAILS_FACTORY" "PaymentRailsCreated(address,
 assert_eq "CREATE2 address matches prediction" "$RAILS_B" "$PREDICTED_B"
 assert_eq "rails B owner" "$(cu $RAILS_B 'owner()(address)')" "$RAILS_OWNER"
 
-assert_eq "registry instance count" "$(cu $RAILS_FACTORY 'getInstanceCount()(uint256)')" "2"
+# Enumeration lives in the PaymentRailsCreated event now; the factory only answers per-instance.
+assert_eq "registry knows rails A" "$(cu $RAILS_FACTORY 'isDeployedInstance(address)(bool)' $RAILS_A)" "true"
+assert_eq "registry knows rails B" "$(cu $RAILS_FACTORY 'isDeployedInstance(address)(bool)' $RAILS_B)" "true"
 assert_eq "registry: unknown address not an instance" \
   "$(cu $RAILS_FACTORY 'isDeployedInstance(address)(bool)' $ATTACKER)" "false"
 
@@ -447,11 +454,17 @@ assert_eq "WETH untouched" "$(bal $WETH $RAILS_A)" "$WETH_BEFORE"
 # ══════════════════════════════════════════════════════════════════════════════
 phase "PHASE 6 — CowSwapModule: factory + full order lifecycle (real CoW Protocol)"
 
-step "only the PaymentRails owner may register a module against their instance"
-send_reverts "attacker cannot plant a module in rails A's registry entry" "$ATTACKER" "$COW_FACTORY" \
+step "only the factory owner may register a module (creation is owner-gated)"
+send_reverts "non-owner cannot create a module (factory is owner-gated)" "$ATTACKER" "$COW_FACTORY" \
   "create(address,address)" "$ATTACKER" "$RAILS_A"
+send_reverts "non-owner cannot squat a predicted module address" "$ATTACKER" "$COW_FACTORY" \
+  "createDeterministic(address,address,bytes32)" "$ATTACKER" "$RAILS_A" "$(cast keccak "cow-module-squat")"
+# Hash-derived so no private key exists: test-mnemonic addresses carry EIP-7702 delegations on
+# mainnet and therefore have code. Same construction as forge's makeAddr.
+NO_CODE_ADDR=0x$(cast keccak "payment-rails-e2e-no-code-fixture" | cut -c 27-66)
+assert_eq "fixture: guard-test address has no code" "$(cast code --rpc-url "$RPC" $NO_CODE_ADDR)" "0x"
 send_reverts "create() rejects a non-contract PaymentRails" "$RAILS_OWNER" "$COW_FACTORY" \
-  "create(address,address)" "$RAILS_OWNER" "$RECIPIENT"
+  "create(address,address)" "$RAILS_OWNER" "$NO_CODE_ADDR"
 
 send "$RAILS_OWNER" "$COW_FACTORY" "create(address,address)" "$RAILS_OWNER" "$RAILS_A" || bad "CowSwapModuleFactory.create()"
 COW_MODULE=$(addr_from_log "CowSwapModule" "$COW_FACTORY" "CowSwapModuleCreated(address,address,address)")

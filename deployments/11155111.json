@@ -3,18 +3,106 @@
   "chainId": 11155111,
   "contracts": {
     "CCTPBridgeModule": {
-      "address": "0x2cd851cdf6c64872370c921fa938e8684420df5d",
-      "blockNumber": 10752259,
-      "commit": "600e214",
-      "deployer": "0x65655d5d18f41775156cdfb53cc5710e13380070",
-      "timestamp": "2026-04-29T00:02:02.710Z",
-      "txHash": "0x9117fafda2e4adad9f805698f16a2c8c5e44c2dd2490a3ca07a24112b0ed83a0",
+      "address": "0x8efffbb37b5a13c859d3e7cdf378749455bf5163",
+      "blockNumber": 11757957,
+      "commit": "5e19683",
+      "deployer": "0xf2a48133d17d27a3cb03b281fa961749272d5296",
+      "timestamp": "2026-09-22T12:41:47.926Z",
+      "txHash": "0x8d09a690c3c107293ad9ee8a360b5957fbacba078f120d12a96b9ed7bea0324d",
       "version": "1.0.0",
       "constructorArgs": [
         "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
-        "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-        "0x65655D5d18F41775156CdFb53cC5710E13380070"
+        "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+      ],
+      "history": [
+        {
+          "address": "0x2cd851cdf6c64872370c921fa938e8684420df5d",
+          "blockNumber": 10752259,
+          "commit": "600e214",
+          "deployer": "0x65655d5d18f41775156cdfb53cc5710e13380070",
+          "timestamp": "2026-04-29T00:02:02.710Z",
+          "txHash": "0x9117fafda2e4adad9f805698f16a2c8c5e44c2dd2490a3ca07a24112b0ed83a0",
+          "version": "1.0.0",
+          "constructorArgs": [
+            "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
+            "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+            "0x65655D5d18F41775156CdFb53cC5710E13380070"
+          ],
+          "deprecated": "2026-09-22"
+        }
       ]
+    },
+    "CowSwapModuleFactory": {
+      "address": "0x80937b5566d02726a2d77fd6a0c52f26e8853001",
+      "blockNumber": 11800809,
+      "commit": "3bc97e3",
+      "deployer": "0xf2a48133d17d27a3cb03b281fa961749272d5296",
+      "timestamp": "2026-09-28T13:27:48.674Z",
+      "txHash": "0x40c4cf3e398c3fff3824ea9b876b8549f4cd8db697ec3560bcb5a4158699decb",
+      "version": "1.0.0",
+      "constructorArgs": [
+        "0x023A86c6e2fA035172f0106356cf5E27837c0b28",
+        "0x9008D19f58AAbD9eD0D60971565AA8510560ab41",
+        "0x0000000000000000000000000000000000000000",
+        "0"
+      ],
+      "history": [
+        {
+          "address": "0x80e51880f95af038c4e5c0094e73ba25d95e4628",
+          "blockNumber": 11758055,
+          "commit": "5e19683",
+          "deployer": "0xf2a48133d17d27a3cb03b281fa961749272d5296",
+          "timestamp": "2026-09-22T13:02:04.087Z",
+          "txHash": "0xd2e126e039e77e50657fc8b4da27305e31d6d2d23a3318e7d83a1a0a93b396e6",
+          "version": "1.0.0",
+          "constructorArgs": [
+            "0x9008D19f58AAbD9eD0D60971565AA8510560ab41",
+            "0x0000000000000000000000000000000000000000",
+            "0"
+          ],
+          "deprecated": "2026-09-28"
+        }
+      ]
+    },
+    "DexSwapModule": {
+      "address": "0xcea10d890918264b47a4e005b75ecb164b9ba661",
+      "blockNumber": 11800867,
+      "commit": "3bc97e3",
+      "deployer": "0xf2a48133d17d27a3cb03b281fa961749272d5296",
+      "timestamp": "2026-09-28T13:39:24.799Z",
+      "txHash": "0xa192fbfe4ddd5f04ec014362281c50b22961f1163d225c9fe858c8293ad14061",
+      "version": "1.0.0",
+      "constructorArgs": [
+        "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E",
+        "0x0000000000000000000000000000000000000000",
+        "0"
+      ],
+      "history": [
+        {
+          "address": "0xe0d666d67f0412f371e8cb28235f246c346992d9",
+          "blockNumber": 11757997,
+          "commit": "5e19683",
+          "deployer": "0xf2a48133d17d27a3cb03b281fa961749272d5296",
+          "timestamp": "2026-09-22T12:50:00.563Z",
+          "txHash": "0x7ab796031701d71177096a5e3d92e8511f854271cdd26b44814cb94b1f5b5ada",
+          "version": "1.0.0",
+          "constructorArgs": [
+            "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E",
+            "0x0000000000000000000000000000000000000000",
+            "0"
+          ],
+          "deprecated": "2026-09-28"
+        }
+      ]
+    },
+    "ForwardModule": {
+      "address": "0xdba6ad43c7ece71bc53b2bc46a5dbc254e599bfd",
+      "blockNumber": 11757925,
+      "commit": "5e19683",
+      "deployer": "0xf2a48133d17d27a3cb03b281fa961749272d5296",
+      "timestamp": "2026-09-22T12:34:53.011Z",
+      "txHash": "0xa44e255df56af08e3e68ce9c533d44b560ec2ea4910458e4e83827340b0bb0ad",
+      "version": "1.0.0"
     },
     "Node": {
       "address": "0xa0a7ec0f4f662259e8a3c5ffc6f3fc0ac8709943",
@@ -25,6 +113,16 @@
       "txHash": "0x88c09aa7eaf696113f839329289ad34d08dcad566eb0256a965a5d2762ab992e",
       "version": "1.0.0",
       "constructorArgs": ["0x65655D5d18F41775156CdFb53cC5710E13380070"]
+    },
+    "PaymentRailsFactory": {
+      "address": "0x0000dd52479de7b800b2f72323a2ba01150db254",
+      "blockNumber": 11757773,
+      "commit": "5e19683",
+      "deployer": "0xf2a48133d17d27a3cb03b281fa961749272d5296",
+      "timestamp": "2026-09-22T12:04:25.849Z",
+      "txHash": "0x6850e71fd95148b6e9b504367ac9967f3bafa51884fa5d5269e803b2fec4e23d",
+      "version": "1.0.0",
+      "constructorArgs": ["0x023A86c6e2fA035172f0106356cf5E27837c0b28"]
     }
   }
 }
