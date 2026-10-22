@@ -13,7 +13,7 @@ on:
 jobs:
   dispatch:
     name: "Notify address-book"
-    uses: "credit-cooperative/devkit/.github/workflows/deployments-dispatch.yml@v1"
+    uses: "credit-cooperative/devkit/.github/workflows/deployments-dispatch.yml@a37584ff8dae0ea3eebba488ca7edd3db69c5ef5" # v1.3.0
     secrets:
       app-id: ${{ secrets.CC_CI_APP_ID }}
       app-private-key: ${{ secrets.CC_CI_APP_PRIVATE_KEY }}
